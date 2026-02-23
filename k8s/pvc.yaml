@@ -1,0 +1,18 @@
+# PersistentVolumeClaim for the SQLite database.
+#
+# SQLite supports only a single writer at a time, so this PVC uses
+# ReadWriteOnce — exactly one pod can mount it as read-write.
+# This also means the Deployment must use exactly 1 replica.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: tg-translator-data
+  namespace: tg-translator
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 1Gi
+  # Uncomment and set the storageClassName appropriate for your cluster.
+  # storageClassName: standard

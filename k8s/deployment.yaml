@@ -1,0 +1,90 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: tg-business-translator
+  namespace: tg-translator
+  labels:
+    app: tg-business-translator
+spec:
+  # Keep exactly 1 replica: SQLite only supports a single writer,
+  # and Telegram polling requires exactly one active long-poll connection.
+  # For webhook mode with a proper relational DB you could increase this.
+  replicas: 1
+  selector:
+    matchLabels:
+      app: tg-business-translator
+  strategy:
+    # Recreate ensures the old pod is terminated before the new one starts,
+    # which prevents two pods from writing to the SQLite file simultaneously.
+    type: Recreate
+  template:
+    metadata:
+      labels:
+        app: tg-business-translator
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1001
+        fsGroup: 1001
+
+      containers:
+        - name: bot
+          image: tg-business-translator:latest  # Replace with your registry image.
+          imagePullPolicy: IfNotPresent
+
+          ports:
+            - containerPort: 8080  # Only relevant in webhook mode.
+
+          # Non-sensitive configuration from ConfigMap.
+          envFrom:
+            - configMapRef:
+                name: tg-translator-config
+
+          # Sensitive configuration from Secret.
+          env:
+            - name: TELEGRAM_BOT_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: tg-translator-secret
+                  key: TELEGRAM_BOT_TOKEN
+            - name: OWNER_CHAT_ID
+              valueFrom:
+                secretKeyRef:
+                  name: tg-translator-secret
+                  key: OWNER_CHAT_ID
+            - name: GEMINI_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: tg-translator-secret
+                  key: GEMINI_API_KEY
+            - name: WEBHOOK_SECRET_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: tg-translator-secret
+                  key: WEBHOOK_SECRET_TOKEN
+
+          volumeMounts:
+            - name: data
+              mountPath: /app/data
+
+          resources:
+            requests:
+              cpu: "50m"
+              memory: "128Mi"
+            limits:
+              cpu: "500m"
+              memory: "256Mi"
+
+          livenessProbe:
+            exec:
+              # Simple check: the process is alive.
+              command: ["pgrep", "-f", "main.py"]
+            initialDelaySeconds: 15
+            periodSeconds: 30
+
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: tg-translator-data
+
+      restartPolicy: Always

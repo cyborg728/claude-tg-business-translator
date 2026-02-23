@@ -1,0 +1,17 @@
+services:
+  bot:
+    build: .
+    image: tg-business-translator:latest
+    restart: unless-stopped
+
+    # Mount a local directory to persist the SQLite database.
+    volumes:
+      - ./data:/app/data
+
+    # Load environment variables from .env (create it from .env.example).
+    env_file:
+      - .env
+
+    # Only expose the port when running in webhook mode (proxied by nginx/traefik).
+    # ports:
+    #   - "8080:8080"

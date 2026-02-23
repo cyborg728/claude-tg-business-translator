@@ -1,0 +1,50 @@
+# Service and Ingress — only needed when MODE=webhook.
+#
+# The bot listens on port 8080 inside the container.  Telegram requires HTTPS
+# on port 443 (or 8443 / 88 / 8080 with a self-signed cert).  The recommended
+# approach is to terminate TLS at the Ingress controller (e.g. nginx + cert-manager).
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: tg-business-translator
+  namespace: tg-translator
+  labels:
+    app: tg-business-translator
+spec:
+  selector:
+    app: tg-business-translator
+  ports:
+    - name: http
+      port: 80
+      targetPort: 8080
+  type: ClusterIP
+
+---
+# Example Ingress using nginx + cert-manager.
+# Replace 'example.com' with your actual domain and ensure cert-manager is installed.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: tg-business-translator
+  namespace: tg-translator
+  annotations:
+    cert-manager.io/cluster-issuer: "letsencrypt-prod"
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+spec:
+  ingressClassName: nginx
+  tls:
+    - hosts:
+        - example.com  # Replace with your domain.
+      secretName: tg-translator-tls
+  rules:
+    - host: example.com  # Replace with your domain.
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: tg-business-translator
+                port:
+                  name: http

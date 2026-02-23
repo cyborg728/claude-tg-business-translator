@@ -1,0 +1,21 @@
+{
+  "start_welcome": "👋 Business Translator Bot is running.\n\nOnce you connect your Telegram Business account, all incoming text messages will be translated and forwarded here.\n\nReply to any notification to send a translated response back to the user.",
+
+  "new_user_message": "👤 <b>{name}</b> ({contact})\n\n📝 <b>Original:</b>\n{original}\n\n🔄 <b>Translation ({target_lang}):</b>\n{translation}\n\n<i>Reply to this message to respond to the user.</i>",
+
+  "reply_sent": "✅ Your reply has been translated and sent to the user.",
+
+  "reply_not_found": "❌ Could not find the original conversation for this message.\nPlease reply directly to a translation notification.",
+
+  "translation_error": "❌ Translation error: {error}",
+
+  "only_text_messages": "ℹ️ Only text messages are translated. Media and other content are not processed.",
+
+  "business_connection_enabled": "✅ Business account connected (ID: <code>{connection_id}</code>).\n\nThe bot will now translate and forward incoming messages.",
+
+  "business_connection_disabled": "⚠️ Business account disconnected (ID: <code>{connection_id}</code>).\n\nThe bot will no longer process messages for this account.",
+
+  "unknown_command": "Unknown command. Send /start to see the welcome message.",
+
+  "help_text": "ℹ️ <b>Business Translator Bot</b>\n\n• Incoming user messages are translated and sent here.\n• Reply to any notification to translate your response and send it to the user.\n• Only plain text messages are translated.\n\nCommands:\n/start — show welcome message\n/help — show this help"
+}
