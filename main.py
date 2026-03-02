@@ -58,12 +58,8 @@ async def main() -> None:
                 settings.webhook_port,
                 settings.webhook_full_url,
             )
-            await app.bot.set_webhook(
-                url=settings.webhook_full_url,
-                secret_token=settings.webhook_secret_token or None,
-                allowed_updates=["message", "business_connection", "business_message"],
-            )
-            # run_webhook is a blocking call that runs the aiohttp server.
+            # start_webhook registers the webhook with Telegram automatically
+            # via webhook_url — no need to call set_webhook separately.
             async with app:
                 await app.start()
                 await app.updater.start_webhook(
@@ -72,9 +68,17 @@ async def main() -> None:
                     url_path=settings.webhook_path,
                     secret_token=settings.webhook_secret_token or None,
                     webhook_url=settings.webhook_full_url,
+                    allowed_updates=["message", "business_connection", "business_message"],
                 )
-                # Keep running until interrupted.
-                await asyncio.Event().wait()
+                try:
+                    await asyncio.Event().wait()
+                except (KeyboardInterrupt, asyncio.CancelledError):
+                    logger.info("Shutdown signal received")
+                finally:
+                    if app.updater.running:
+                        await app.updater.stop()
+                    if app.running:
+                        await app.stop()
         else:
             logger.info("Polling mode — starting long-poll loop")
             async with app:
@@ -83,13 +87,17 @@ async def main() -> None:
                     allowed_updates=["message", "business_connection", "business_message"],
                     drop_pending_updates=True,
                 )
-                await asyncio.Event().wait()
-    except (KeyboardInterrupt, asyncio.CancelledError):
-        logger.info("Shutdown signal received")
+                try:
+                    await asyncio.Event().wait()
+                except (KeyboardInterrupt, asyncio.CancelledError):
+                    logger.info("Shutdown signal received")
+                finally:
+                    if app.updater.running:
+                        await app.updater.stop()
+                    if app.running:
+                        await app.stop()
     finally:
         logger.info("Shutting down …")
-        if app.running:
-            await app.stop()
         await db.disconnect()
         logger.info("Goodbye.")
 
