@@ -27,10 +27,13 @@ spec:
         runAsUser: 1001
         fsGroup: 1001
 
+      imagePullSecrets:
+        - name: ghcr-secret
+
       containers:
         - name: bot
-          image: tg-business-translator:latest  # Replace with your registry image.
-          imagePullPolicy: IfNotPresent
+          image: ghcr.io/cyborg728/claude-tg-business-translator:latest
+          imagePullPolicy: Always
 
           ports:
             - containerPort: 8080  # Only relevant in webhook mode.
