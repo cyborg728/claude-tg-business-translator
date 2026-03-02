@@ -17,5 +17,24 @@
 
   "unknown_command": "Unknown command. Send /start to see the welcome message.",
 
-  "help_text": "ℹ️ <b>Business Translator Bot</b>\n\n• Incoming user messages are translated and sent here.\n• Reply to any notification to translate your response and send it to the user.\n• Only plain text messages are translated.\n\nCommands:\n/start — show welcome message\n/help — show this help"
+  "help_text": "ℹ️ <b>Business Translator Bot</b>\n\n• Incoming user messages are translated and sent here.\n• Reply to any notification to translate your response and send it to the user.\n• Only plain text messages are translated.\n\nCommands:\n/start — show welcome message\n/help — show this help\n/translator — translation settings",
+
+  "translator_menu_title": "⚙️ <b>Translation settings</b>",
+  "translator_status_on": "Translation: ✅ enabled",
+  "translator_status_off": "Translation: ⏸ disabled",
+  "translator_whitelist_all": "List: all users",
+  "translator_whitelist_count": "List: {count} users",
+  "translator_btn_add": "➕ Add user",
+  "translator_btn_remove": "🗑 Remove user",
+  "translator_btn_disable": "⏸ Disable translation",
+  "translator_btn_enable": "▶️ Enable translation",
+  "translator_btn_back": "← Back",
+  "translator_ask_username": "Enter the username (without @):",
+  "translator_added": "✅ @{username} added to the list.",
+  "translator_already_exists": "ℹ️ @{username} is already in the list.",
+  "translator_removed": "✅ @{username} removed from the list.",
+  "translator_not_found": "ℹ️ @{username} was not found in the list.",
+  "translator_invalid_username": "❌ Invalid username. Use letters, digits and _ (5–32 characters).",
+  "translator_list_empty": "The list is empty — translation applies to everyone.",
+  "translator_remove_prompt": "Choose a user to remove:"
 }

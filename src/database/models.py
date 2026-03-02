@@ -101,3 +101,31 @@ class MessageMapping(Base):
             f"notification_msg={self.notification_message_id}, "
             f"user={self.user_id})"
         )
+
+
+class AllowedUser(Base):
+    """Username whitelist: only translate messages from users in this table.
+
+    If the table is empty, translation applies to everyone.
+    """
+
+    __tablename__ = "allowed_users"
+
+    # Stored in lowercase, without the leading @.
+    username: Mapped[str] = mapped_column(String(32), primary_key=True)
+    added_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow, nullable=False)
+
+    def __repr__(self) -> str:
+        return f"AllowedUser(username={self.username!r})"
+
+
+class BotSetting(Base):
+    """Generic key-value store for bot-level settings (e.g. translation_enabled)."""
+
+    __tablename__ = "bot_settings"
+
+    key: Mapped[str] = mapped_column(String(64), primary_key=True)
+    value: Mapped[str] = mapped_column(String(255), nullable=False)
+
+    def __repr__(self) -> str:
+        return f"BotSetting(key={self.key!r}, value={self.value!r})"
