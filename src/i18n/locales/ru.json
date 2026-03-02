@@ -22,7 +22,7 @@
   "translator_menu_title": "⚙️ <b>Настройки переводчика</b>",
   "translator_status_on": "Перевод: ✅ включён",
   "translator_status_off": "Перевод: ⏸ отключён",
-  "translator_whitelist_all": "Список: все пользователи",
+  "translator_whitelist_all": "Список: никто (перевод не работает)",
   "translator_whitelist_count": "Список: {count} пользователей",
   "translator_btn_add": "➕ Добавить",
   "translator_btn_remove": "🗑 Удалить",
@@ -35,6 +35,6 @@
   "translator_removed": "✅ @{username} удалён из списка.",
   "translator_not_found": "ℹ️ @{username} не найден в списке.",
   "translator_invalid_username": "❌ Некорректный username. Используйте латинские буквы, цифры и _ (5–32 символа).",
-  "translator_list_empty": "Список пуст — перевод работает для всех.",
+  "translator_list_empty": "Список пуст — перевод не работает ни для кого.",
   "translator_remove_prompt": "Выберите пользователя для удаления:"
 }

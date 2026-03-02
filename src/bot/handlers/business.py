@@ -121,14 +121,14 @@ class BusinessHandlers:
         if not enabled:
             return
 
-        # 2. Whitelist: if the list is non-empty, only translate messages from
-        #    users whose username appears in it.  Users without a username are
-        #    skipped when the list has entries.
+        # 2. Whitelist: translate only for users whose username is in the list.
+        #    Empty list = nobody → skip.
         allowed = await self._allowed_users.list_all()
-        if allowed:
-            sender_username = (sender.username or "").lower()
-            if not sender_username or sender_username not in allowed:
-                return
+        if not allowed:
+            return
+        sender_username = (sender.username or "").lower()
+        if not sender_username or sender_username not in allowed:
+            return
         # ─────────────────────────────────────────────────────────────────────
 
         business_connection_id = message.business_connection_id

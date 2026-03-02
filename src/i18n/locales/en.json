@@ -22,7 +22,7 @@
   "translator_menu_title": "⚙️ <b>Translation settings</b>",
   "translator_status_on": "Translation: ✅ enabled",
   "translator_status_off": "Translation: ⏸ disabled",
-  "translator_whitelist_all": "List: all users",
+  "translator_whitelist_all": "List: nobody (translation inactive)",
   "translator_whitelist_count": "List: {count} users",
   "translator_btn_add": "➕ Add user",
   "translator_btn_remove": "🗑 Remove user",
@@ -35,6 +35,6 @@
   "translator_removed": "✅ @{username} removed from the list.",
   "translator_not_found": "ℹ️ @{username} was not found in the list.",
   "translator_invalid_username": "❌ Invalid username. Use letters, digits and _ (5–32 characters).",
-  "translator_list_empty": "The list is empty — translation applies to everyone.",
+  "translator_list_empty": "The list is empty — translation is inactive for everyone.",
   "translator_remove_prompt": "Choose a user to remove:"
 }
