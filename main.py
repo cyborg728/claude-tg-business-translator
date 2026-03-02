@@ -33,6 +33,7 @@ logging.basicConfig(
 logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("httpcore").setLevel(logging.WARNING)
 logging.getLogger("telegram").setLevel(logging.WARNING)
+logging.getLogger("telegram.ext").setLevel(logging.INFO)
 
 logger = logging.getLogger(__name__)
 
@@ -69,6 +70,7 @@ async def main() -> None:
                     secret_token=settings.webhook_secret_token or None,
                     webhook_url=settings.webhook_full_url,
                     allowed_updates=["message", "business_connection", "business_message"],
+                    bootstrap_retries=-1,
                 )
                 try:
                     await asyncio.Event().wait()
