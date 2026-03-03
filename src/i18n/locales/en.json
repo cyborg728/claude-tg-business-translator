@@ -36,5 +36,36 @@
   "translator_not_found": "ℹ️ @{username} was not found in the list.",
   "translator_invalid_username": "❌ Invalid username. Use letters, digits and _ (5–32 characters).",
   "translator_list_empty": "The list is empty — translation is inactive for everyone.",
-  "translator_remove_prompt": "Choose a user to remove:"
+  "translator_remove_prompt": "Choose a user to remove:",
+
+  "access_btn": "👥 Access",
+  "access_menu_title": "👥 <b>Access management</b>",
+  "access_btn_add": "➕ Add user",
+  "access_btn_remove": "🗑 Remove user",
+  "access_ask_username": "Enter the username (without @) to grant access:",
+  "access_added": "✅ @{username} has been granted access.",
+  "access_already_exists": "ℹ️ @{username} already has access.",
+  "access_removed": "✅ @{username}'s access has been revoked.",
+  "access_not_found": "ℹ️ @{username} was not found in the access list.",
+  "access_list_empty": "The access list is empty.",
+  "access_remove_prompt": "Choose a user to revoke access from:",
+
+  "translate_pick_language": "Choose the target language:",
+  "translate_ask_text": "Send the text to translate:",
+  "translate_result": "🔤 <b>Translation</b> ({source} → {target})\n\n{translation}",
+  "translate_change_lang": "🌐 Change language",
+  "translate_no_lang": "No target language set — please choose one first.",
+
+  "lang_ru": "Russian",
+  "lang_en": "English",
+  "lang_de": "German",
+  "lang_fr": "French",
+  "lang_es": "Spanish",
+  "lang_zh": "Chinese",
+  "lang_ja": "Japanese",
+  "lang_ar": "Arabic",
+  "lang_tr": "Turkish",
+  "lang_it": "Italian",
+  "lang_pt": "Portuguese",
+  "lang_ko": "Korean"
 }

@@ -104,28 +104,68 @@ class MessageMapping(Base):
 
 
 class AllowedUser(Base):
-    """Username whitelist: only translate messages from users in this table.
+    """Username whitelist per owner: only translate messages from users in this table.
 
-    If the table is empty, translation applies to everyone.
+    If the table has no entries for a given owner, translation applies to nobody.
+    Composite PK: (owner_chat_id, username).
     """
 
     __tablename__ = "allowed_users"
 
+    # The bot-chat ID of the owner who manages this whitelist.
+    owner_chat_id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
     # Stored in lowercase, without the leading @.
     username: Mapped[str] = mapped_column(String(32), primary_key=True)
     added_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow, nullable=False)
 
     def __repr__(self) -> str:
-        return f"AllowedUser(username={self.username!r})"
+        return f"AllowedUser(owner={self.owner_chat_id}, username={self.username!r})"
 
 
 class BotSetting(Base):
-    """Generic key-value store for bot-level settings (e.g. translation_enabled)."""
+    """Generic key-value store for per-owner bot settings (e.g. translation_enabled).
+
+    Composite PK: (owner_chat_id, key).
+    """
 
     __tablename__ = "bot_settings"
 
+    # The bot-chat ID of the owner who owns this setting.
+    owner_chat_id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
     key: Mapped[str] = mapped_column(String(64), primary_key=True)
     value: Mapped[str] = mapped_column(String(255), nullable=False)
 
     def __repr__(self) -> str:
-        return f"BotSetting(key={self.key!r}, value={self.value!r})"
+        return f"BotSetting(owner={self.owner_chat_id}, key={self.key!r}, value={self.value!r})"
+
+
+class AuthorizedUser(Base):
+    """Users (other than the main owner) who are allowed to use the bot.
+
+    The main owner manages this list via /translator → Access.
+    Stored by username (lowercase, no @).
+    """
+
+    __tablename__ = "authorized_users"
+
+    username: Mapped[str] = mapped_column(String(32), primary_key=True)
+    added_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow, nullable=False)
+
+    def __repr__(self) -> str:
+        return f"AuthorizedUser(username={self.username!r})"
+
+
+class Language(Base):
+    """Available translation target languages.
+
+    code    — ISO 639-1 code (e.g. "ru", "en", "de").
+    name_key — i18n key used to look up the localised language name (e.g. "lang_ru").
+    """
+
+    __tablename__ = "languages"
+
+    code: Mapped[str] = mapped_column(String(10), primary_key=True)
+    name_key: Mapped[str] = mapped_column(String(64), nullable=False)
+
+    def __repr__(self) -> str:
+        return f"Language(code={self.code!r}, name_key={self.name_key!r})"

@@ -36,5 +36,36 @@
   "translator_not_found": "ℹ️ @{username} не найден в списке.",
   "translator_invalid_username": "❌ Некорректный username. Используйте латинские буквы, цифры и _ (5–32 символа).",
   "translator_list_empty": "Список пуст — перевод не работает ни для кого.",
-  "translator_remove_prompt": "Выберите пользователя для удаления:"
+  "translator_remove_prompt": "Выберите пользователя для удаления:",
+
+  "access_btn": "👥 Доступ",
+  "access_menu_title": "👥 <b>Управление доступом</b>",
+  "access_btn_add": "➕ Добавить",
+  "access_btn_remove": "🗑 Удалить",
+  "access_ask_username": "Введите username пользователя (без @) для выдачи доступа:",
+  "access_added": "✅ @{username} получил доступ к боту.",
+  "access_already_exists": "ℹ️ @{username} уже имеет доступ.",
+  "access_removed": "✅ Доступ @{username} отозван.",
+  "access_not_found": "ℹ️ @{username} не найден в списке доступа.",
+  "access_list_empty": "Список доступа пуст.",
+  "access_remove_prompt": "Выберите пользователя для удаления доступа:",
+
+  "translate_pick_language": "Выберите язык перевода:",
+  "translate_ask_text": "Отправьте текст для перевода:",
+  "translate_result": "🔤 <b>Перевод</b> ({source} → {target})\n\n{translation}",
+  "translate_change_lang": "🌐 Изменить язык",
+  "translate_no_lang": "Язык перевода не выбран — сначала выберите язык.",
+
+  "lang_ru": "Русский",
+  "lang_en": "Английский",
+  "lang_de": "Немецкий",
+  "lang_fr": "Французский",
+  "lang_es": "Испанский",
+  "lang_zh": "Китайский",
+  "lang_ja": "Японский",
+  "lang_ar": "Арабский",
+  "lang_tr": "Турецкий",
+  "lang_it": "Итальянский",
+  "lang_pt": "Португальский",
+  "lang_ko": "Корейский"
 }
