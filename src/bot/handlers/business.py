@@ -273,6 +273,16 @@ class BusinessHandlers:
             business_connection_id=mapping.business_connection_id,
         )
 
+        # Mark the original user message as read.
+        try:
+            await context.bot.read_business_message(
+                business_connection_id=mapping.business_connection_id,
+                chat_id=mapping.user_chat_id,
+                message_id=mapping.original_message_id,
+            )
+        except Exception as exc:
+            logger.warning("Failed to mark business message as read: %s", exc)
+
         # Confirm delivery to the owner.
         await message.reply_text(
             self._t("reply_sent"),
