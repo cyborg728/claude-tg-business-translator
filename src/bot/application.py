@@ -23,7 +23,14 @@ from src.database.repositories import (
 from src.i18n import Translator
 from src.services import TranslationService
 
-from .handlers import BusinessHandlers, CommandHandlers, TranslateHandlers, TranslatorMenuHandlers
+from .handlers import BusinessHandlers, CommandHandlers, SettingsHandlers, TranslateHandlers, TranslatorMenuHandlers
+from .handlers.settings import (
+    _CB_SETTINGS_BACK,
+    _CB_SETTINGS_LANG,
+    _CB_SETTINGS_LANG_PREFIX,
+    _CB_SETTINGS_TZ,
+    BOT_LOCALE_KEY,
+)
 from .handlers.translate import _CB_CHANGE_LANG, _CB_LANG_PREFIX
 from .handlers.translator_menu import (
     _CB_ACCESS,
@@ -94,11 +101,24 @@ def build_application(settings: Settings, session_factory) -> Application:
         bot_setting_repo=bot_setting_repo,
         authorized_user_repo=authorized_user_repo,
     )
+    settings_handlers = SettingsHandlers(
+        settings=settings,
+        translator=translator,
+        bot_setting_repo=bot_setting_repo,
+    )
+
+    # ── post_init: restore saved locale on startup ────────────────────────────
+    async def _post_init(app) -> None:
+        saved_locale = await bot_setting_repo.get(
+            settings.owner_chat_id, BOT_LOCALE_KEY, settings.locale
+        )
+        translator.switch_locale(saved_locale)
 
     # ── Build PTB application ─────────────────────────────────────────────────
     app = (
         ApplicationBuilder()
         .token(settings.telegram_bot_token)
+        .post_init(_post_init)
         .build()
     )
 
@@ -151,8 +171,19 @@ def build_application(settings: Settings, session_factory) -> Application:
         CallbackQueryHandler(translate_handlers.cb_change_lang, pattern=f"^{_CB_CHANGE_LANG}$")
     )
 
+    # /settings inline menu — callbacks.
+    app.add_handler(CallbackQueryHandler(settings_handlers.cb_lang, pattern=f"^{_CB_SETTINGS_LANG}$"))
+    app.add_handler(CallbackQueryHandler(settings_handlers.cb_tz, pattern=f"^{_CB_SETTINGS_TZ}$"))
+    app.add_handler(
+        CallbackQueryHandler(settings_handlers.cb_set_lang, pattern=f"^{_CB_SETTINGS_LANG_PREFIX}")
+    )
+    app.add_handler(
+        CallbackQueryHandler(settings_handlers.cb_back, pattern=f"^{_CB_SETTINGS_BACK}$")
+    )
+
     # Commands available to all authorized users (owner + access list).
     _private = filters.ChatType.PRIVATE
+    app.add_handler(CommandHandler("settings", settings_handlers.cmd_settings, filters=_private))
     app.add_handler(CommandHandler("translator", translator_menu.cmd_translator, filters=_private))
     app.add_handler(CommandHandler("translate", translate_handlers.cmd_translate, filters=_private))
     app.add_handler(CommandHandler("start", command_handlers.start))
@@ -176,6 +207,10 @@ def build_application(settings: Settings, session_factory) -> Application:
     app.add_handler(
         MessageHandler(_plain_text, translate_handlers.handle_text_input),
         group=_GROUP_TEXT_INPUT + 1,
+    )
+    app.add_handler(
+        MessageHandler(_plain_text, settings_handlers.handle_time_input),
+        group=_GROUP_TEXT_INPUT + 2,
     )
 
     logger.info("Application built — mode=%s locale=%s", settings.mode, settings.locale)

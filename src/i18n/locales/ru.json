@@ -56,6 +56,18 @@
   "translate_change_lang": "🌐 Изменить язык",
   "translate_no_lang": "Язык перевода не выбран — сначала выберите язык.",
 
+  "settings_menu_title": "⚙️ <b>Настройки бота</b>",
+  "settings_btn_lang": "🌐 Язык бота",
+  "settings_btn_tz": "🕐 Часовой пояс",
+  "settings_btn_back": "← Назад",
+  "settings_current_lang": "Язык интерфейса: <b>{lang}</b>",
+  "settings_current_tz": "Часовой пояс: <b>{tz}</b>",
+  "settings_tz_not_set": "не задан",
+  "settings_pick_lang": "Выберите язык интерфейса бота:",
+  "settings_ask_time": "Отправьте ваше <b>текущее время</b> в формате ЧЧ:ММ\n(например: <code>14:30</code>):",
+  "settings_invalid_time": "❌ Некорректный формат. Введите время как <code>ЧЧ:ММ</code>, например <code>14:30</code>.",
+  "settings_tz_saved": "✅ Часовой пояс установлен: <b>{tz}</b>.",
+
   "lang_ru": "Русский",
   "lang_en": "Английский",
   "lang_de": "Немецкий",

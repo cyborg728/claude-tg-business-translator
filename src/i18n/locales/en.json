@@ -56,6 +56,18 @@
   "translate_change_lang": "🌐 Change language",
   "translate_no_lang": "No target language set — please choose one first.",
 
+  "settings_menu_title": "⚙️ <b>Bot settings</b>",
+  "settings_btn_lang": "🌐 Bot language",
+  "settings_btn_tz": "🕐 Timezone",
+  "settings_btn_back": "← Back",
+  "settings_current_lang": "Interface language: <b>{lang}</b>",
+  "settings_current_tz": "Timezone: <b>{tz}</b>",
+  "settings_tz_not_set": "not set",
+  "settings_pick_lang": "Choose the bot interface language:",
+  "settings_ask_time": "Send your <b>current local time</b> in HH:MM format\n(e.g. <code>14:30</code>):",
+  "settings_invalid_time": "❌ Invalid format. Please enter time as <code>HH:MM</code>, e.g. <code>14:30</code>.",
+  "settings_tz_saved": "✅ Timezone set: <b>{tz}</b>.",
+
   "lang_ru": "Russian",
   "lang_en": "English",
   "lang_de": "German",
