@@ -2,7 +2,7 @@
 #
 # The bot listens on port 8080 inside the container.  Telegram requires HTTPS
 # on port 443 (or 8443 / 88 / 8080 with a self-signed cert).  The recommended
-# approach is to terminate TLS at the Ingress controller (e.g. nginx + cert-manager).
+# approach is to terminate TLS at the Ingress controller (e.g. traefik + cert-manager).
 ---
 apiVersion: v1
 kind: Service
@@ -28,9 +28,9 @@ metadata:
   namespace: tg-translator
   annotations:
     cert-manager.io/cluster-issuer: "letsencrypt-prod"
-    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    traefik.ingress.kubernetes.io/router.entrypoints: websecure
 spec:
-  ingressClassName: nginx
+  ingressClassName: traefik
   tls:
     - hosts:
         - tg.f-f.dev

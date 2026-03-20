@@ -21,6 +21,7 @@ import sys
 from src.bot import build_application
 from src.config import get_settings
 from src.database.connection import Database
+from src.database.repositories import LanguageRepository
 
 # ── Logging ───────────────────────────────────────────────────────────────────
 logging.basicConfig(
@@ -33,6 +34,7 @@ logging.basicConfig(
 logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("httpcore").setLevel(logging.WARNING)
 logging.getLogger("telegram").setLevel(logging.WARNING)
+logging.getLogger("telegram.ext").setLevel(logging.INFO)
 
 logger = logging.getLogger(__name__)
 
@@ -46,6 +48,9 @@ async def main() -> None:
     db = Database(settings.database_url)
     await db.connect()
     logger.info("Database ready at %s", settings.database_path)
+
+    # Seed default languages if the table is empty.
+    await LanguageRepository(db.get_session_factory()).seed_if_empty()
 
     # ── Application ───────────────────────────────────────────────────────────
     app = build_application(settings, db.get_session_factory())
@@ -69,6 +74,7 @@ async def main() -> None:
                     secret_token=settings.webhook_secret_token or None,
                     webhook_url=settings.webhook_full_url,
                     allowed_updates=["message", "business_connection", "business_message"],
+                    bootstrap_retries=-1,
                 )
                 try:
                     await asyncio.Event().wait()

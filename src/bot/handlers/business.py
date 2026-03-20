@@ -11,6 +11,12 @@ from src.database.repositories import (
     IMessageMappingRepository,
     IUserRepository,
 )
+from src.database.repositories.allowed_user import IAllowedUserRepository
+from src.database.repositories.authorized_user import IAuthorizedUserRepository
+from src.database.repositories.bot_setting import (
+    IBotSettingRepository,
+    TRANSLATION_ENABLED_KEY,
+)
 from src.i18n import Translator
 from src.services import TranslationService
 
@@ -44,6 +50,9 @@ class BusinessHandlers:
         connection_repo: IBusinessConnectionRepository,
         message_repo: IMessageMappingRepository,
         user_repo: IUserRepository,
+        allowed_user_repo: IAllowedUserRepository,
+        bot_setting_repo: IBotSettingRepository,
+        authorized_user_repo: IAuthorizedUserRepository,
     ) -> None:
         self._settings = settings
         self._t = translator
@@ -51,6 +60,25 @@ class BusinessHandlers:
         self._connection_repo = connection_repo
         self._message_repo = message_repo
         self._user_repo = user_repo
+        self._allowed_users = allowed_user_repo
+        self._bot_settings = bot_setting_repo
+        self._auth_users = authorized_user_repo
+
+    # ── Authorization helper ──────────────────────────────────────────────────
+
+    async def _is_authorized(self, update: Update) -> bool:
+        """Return True if the user sending this update may use bot features."""
+        chat_id = update.effective_chat.id if update.effective_chat else None
+        if chat_id == self._settings.owner_chat_id:
+            return True
+        username = (
+            (update.effective_user.username or "").lower()
+            if update.effective_user
+            else ""
+        )
+        if not username:
+            return False
+        return await self._auth_users.exists(username)
 
     # ── Business connection ───────────────────────────────────────────────────
 
@@ -102,14 +130,39 @@ class BusinessHandlers:
         if sender is None:
             return
 
-        # Ignore messages coming *from* the owner inside the business chat.
-        if sender.id == self._settings.owner_chat_id:
-            return
-
         business_connection_id = message.business_connection_id
         if not business_connection_id:
             logger.warning("Business message received without business_connection_id — skipping")
             return
+
+        # Look up the business connection to find the owner of this account.
+        connection = await self._connection_repo.get(business_connection_id)
+        if connection is None:
+            logger.warning("No connection record for id=%s — skipping", business_connection_id)
+            return
+        owner_chat_id = connection.owner_chat_id
+
+        # Ignore messages coming *from* the account owner themselves.
+        if sender.id == connection.owner_user_id:
+            return
+
+        # ── Translation gate ──────────────────────────────────────────────────
+        # 1. Global toggle: if translation is disabled for this owner, skip.
+        enabled = (
+            await self._bot_settings.get(owner_chat_id, TRANSLATION_ENABLED_KEY, "true") == "true"
+        )
+        if not enabled:
+            return
+
+        # 2. Whitelist: translate only for users in this owner's whitelist.
+        #    Empty list = nobody → skip.
+        allowed = await self._allowed_users.list_all(owner_chat_id)
+        if not allowed:
+            return
+        sender_username = (sender.username or "").lower()
+        if not sender_username or sender_username not in allowed:
+            return
+        # ─────────────────────────────────────────────────────────────────────
 
         # Persist / refresh user record.
         user_record = UserRecord(
@@ -149,9 +202,9 @@ class BusinessHandlers:
             translation=translated_text,
         )
 
-        # Send notification to the owner.
+        # Send notification to the connection owner.
         notification = await context.bot.send_message(
-            chat_id=self._settings.owner_chat_id,
+            chat_id=owner_chat_id,
             text=notification_text,
             parse_mode=ParseMode.HTML,
         )
@@ -185,6 +238,9 @@ class BusinessHandlers:
         if message is None or not message.text or message.reply_to_message is None:
             return
 
+        if not await self._is_authorized(update):
+            return
+
         replied_to_id = message.reply_to_message.message_id
 
         # Look up the stored mapping.
@@ -216,6 +272,16 @@ class BusinessHandlers:
             text=translated_reply,
             business_connection_id=mapping.business_connection_id,
         )
+
+        # Mark the original user message as read.
+        try:
+            await context.bot.read_business_message(
+                business_connection_id=mapping.business_connection_id,
+                chat_id=mapping.user_chat_id,
+                message_id=mapping.original_message_id,
+            )
+        except Exception as exc:
+            logger.warning("Failed to mark business message as read: %s", exc)
 
         # Confirm delivery to the owner.
         await message.reply_text(

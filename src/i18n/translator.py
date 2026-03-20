@@ -53,6 +53,18 @@ class Translator:
         with path.open(encoding="utf-8") as fh:
             return json.load(fh)
 
+    def switch_locale(self, locale: str) -> None:
+        """Reload messages for a different locale in-place.
+
+        All handlers that share this Translator instance will immediately
+        start using the new locale.
+        """
+        resolved = locale if locale in _SUPPORTED_LOCALES else _FALLBACK_LOCALE
+        if resolved != locale:
+            logger.warning("Locale %r not supported — falling back to %r", locale, resolved)
+        self._locale = resolved
+        self._messages = self._load(resolved)
+
     def _fallback(self, key: str) -> str:
         """Try the English fallback file, then return the raw key."""
         if self._locale != _FALLBACK_LOCALE:
