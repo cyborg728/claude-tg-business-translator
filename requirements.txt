@@ -3,4 +3,5 @@ pydantic>=2.10.0
 pydantic-settings>=2.13.0
 google-genai>=1.64.0
 sqlalchemy>=2.0.46
+sqlmodel>=0.0.38
 aiosqlite>=0.22.1
