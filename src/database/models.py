@@ -2,6 +2,7 @@ from datetime import datetime, timezone
 from typing import Optional
 
 from sqlalchemy import BigInteger, Boolean, Column, DateTime, Integer, String, Text
+from sqlalchemy.orm import declared_attr
 from sqlmodel import Field, SQLModel
 
 
@@ -9,7 +10,23 @@ def _utcnow() -> datetime:
     return datetime.now(timezone.utc).replace(tzinfo=None)
 
 
-class BusinessConnectionRecord(SQLModel, table=True):
+class CreatedAtMixin:
+    """Adds a ``created_at`` column set once on INSERT."""
+
+    @declared_attr
+    def created_at(cls) -> Column:
+        return Column(DateTime, default=_utcnow, nullable=False)
+
+
+class TimestampMixin(CreatedAtMixin):
+    """Adds ``created_at`` (INSERT) and ``updated_at`` (INSERT + UPDATE) columns."""
+
+    @declared_attr
+    def updated_at(cls) -> Column:
+        return Column(DateTime, default=_utcnow, onupdate=_utcnow, nullable=False)
+
+
+class BusinessConnectionRecord(TimestampMixin, SQLModel, table=True):
     """Stores Telegram Business Connection events."""
 
     __tablename__ = "business_connections"
@@ -19,13 +36,6 @@ class BusinessConnectionRecord(SQLModel, table=True):
     # Chat between the bot and the business-account user (for DM notifications).
     owner_chat_id: int = Field(sa_column=Column(BigInteger, nullable=False))
     is_enabled: bool = Field(default=True, sa_column=Column(Boolean, default=True, nullable=False))
-    created_at: Optional[datetime] = Field(
-        default=None, sa_column=Column(DateTime, default=_utcnow, nullable=False)
-    )
-    updated_at: Optional[datetime] = Field(
-        default=None,
-        sa_column=Column(DateTime, default=_utcnow, onupdate=_utcnow, nullable=False),
-    )
 
     def __repr__(self) -> str:
         return (
@@ -34,7 +44,7 @@ class BusinessConnectionRecord(SQLModel, table=True):
         )
 
 
-class UserRecord(SQLModel, table=True):
+class UserRecord(TimestampMixin, SQLModel, table=True):
     """Caches Telegram user info and their detected language."""
 
     __tablename__ = "users"
@@ -47,13 +57,6 @@ class UserRecord(SQLModel, table=True):
     language_code: Optional[str] = Field(
         default=None, sa_column=Column(String(10), nullable=True)
     )
-    created_at: Optional[datetime] = Field(
-        default=None, sa_column=Column(DateTime, default=_utcnow, nullable=False)
-    )
-    updated_at: Optional[datetime] = Field(
-        default=None,
-        sa_column=Column(DateTime, default=_utcnow, onupdate=_utcnow, nullable=False),
-    )
 
     @property
     def full_name(self) -> str:
@@ -65,7 +68,7 @@ class UserRecord(SQLModel, table=True):
         return f"UserRecord(id={self.user_id}, name={self.first_name!r})"
 
 
-class MessageMapping(SQLModel, table=True):
+class MessageMapping(CreatedAtMixin, SQLModel, table=True):
     """Maps each bot-notification message to its business-conversation context.
 
     When the owner replies to a notification message the bot sent, this table
@@ -102,10 +105,6 @@ class MessageMapping(SQLModel, table=True):
     # Language of the user (to translate owner replies back into).
     user_language: Optional[str] = Field(
         default=None, sa_column=Column(String(10), nullable=True)
-    )
-
-    created_at: Optional[datetime] = Field(
-        default=None, sa_column=Column(DateTime, default=_utcnow, nullable=False)
     )
 
     def __repr__(self) -> str:
