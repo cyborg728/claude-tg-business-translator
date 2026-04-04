@@ -10,6 +10,18 @@ def _utcnow() -> datetime:
     return datetime.now(timezone.utc).replace(tzinfo=None)
 
 
+class Base(SQLModel):
+    """Shared base for all table models.
+
+    ``eager_defaults=True`` tells SQLAlchemy to fetch server-generated column
+    values (e.g. ``DEFAULT``, ``onupdate``) with a SELECT immediately after
+    every INSERT/UPDATE, so the Python object is always up-to-date without an
+    explicit ``session.refresh()``.
+    """
+
+    __mapper_args__ = {"eager_defaults": True}
+
+
 class CreatedAtMixin:
     """Adds a ``created_at`` column set once on INSERT."""
 
@@ -26,7 +38,7 @@ class TimestampMixin(CreatedAtMixin):
         return Column(DateTime, default=_utcnow, onupdate=_utcnow, nullable=False)
 
 
-class BusinessConnectionRecord(TimestampMixin, SQLModel, table=True):
+class BusinessConnectionRecord(TimestampMixin, Base, table=True):
     """Stores Telegram Business Connection events."""
 
     __tablename__ = "business_connections"
@@ -44,7 +56,7 @@ class BusinessConnectionRecord(TimestampMixin, SQLModel, table=True):
         )
 
 
-class UserRecord(TimestampMixin, SQLModel, table=True):
+class UserRecord(TimestampMixin, Base, table=True):
     """Caches Telegram user info and their detected language."""
 
     __tablename__ = "users"
@@ -68,7 +80,7 @@ class UserRecord(TimestampMixin, SQLModel, table=True):
         return f"UserRecord(id={self.user_id}, name={self.first_name!r})"
 
 
-class MessageMapping(CreatedAtMixin, SQLModel, table=True):
+class MessageMapping(CreatedAtMixin, Base, table=True):
     """Maps each bot-notification message to its business-conversation context.
 
     When the owner replies to a notification message the bot sent, this table
@@ -115,7 +127,7 @@ class MessageMapping(CreatedAtMixin, SQLModel, table=True):
         )
 
 
-class AllowedUser(SQLModel, table=True):
+class AllowedUser(Base, table=True):
     """Username whitelist per owner: only translate messages from users in this table.
 
     If the table has no entries for a given owner, translation applies to nobody.
@@ -136,7 +148,7 @@ class AllowedUser(SQLModel, table=True):
         return f"AllowedUser(owner={self.owner_chat_id}, username={self.username!r})"
 
 
-class BotSetting(SQLModel, table=True):
+class BotSetting(Base, table=True):
     """Generic key-value store for per-owner bot settings (e.g. translation_enabled).
 
     Composite PK: (owner_chat_id, key).
@@ -153,7 +165,7 @@ class BotSetting(SQLModel, table=True):
         return f"BotSetting(owner={self.owner_chat_id}, key={self.key!r}, value={self.value!r})"
 
 
-class AuthorizedUser(SQLModel, table=True):
+class AuthorizedUser(Base, table=True):
     """Users (other than the main owner) who are allowed to use the bot.
 
     The main owner manages this list via /translator → Access.
@@ -171,7 +183,7 @@ class AuthorizedUser(SQLModel, table=True):
         return f"AuthorizedUser(username={self.username!r})"
 
 
-class Language(SQLModel, table=True):
+class Language(Base, table=True):
     """Available translation target languages.
 
     code    — ISO 639-1 code (e.g. "ru", "en", "de").
