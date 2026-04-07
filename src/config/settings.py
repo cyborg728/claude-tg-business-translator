@@ -1,7 +1,7 @@
 from functools import lru_cache
 from typing import Literal
 
-from pydantic import Field, field_validator
+from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -57,8 +57,14 @@ class Settings(BaseSettings):
 
     @field_validator("mode", mode="before")
     @classmethod
-    def _validate_webhook_url(cls, v: str) -> str:
+    def _normalize_mode(cls, v: str) -> str:
         return v.lower().strip()
+
+    @model_validator(mode="after")
+    def _require_webhook_url_in_webhook_mode(self) -> "Settings":
+        if self.mode == "webhook" and not self.webhook_url:
+            raise ValueError("webhook_url must be set when mode='webhook'")
+        return self
 
 
 @lru_cache(maxsize=1)
