@@ -63,7 +63,7 @@ class BusinessConnectionRepository(IBusinessConnectionRepository):
         async with self._session() as sess:
             result = await sess.execute(
                 select(BusinessConnectionRecord).where(
-                    BusinessConnectionRecord.is_enabled.is_(True)
+                    col(BusinessConnectionRecord.is_enabled).is_(True)
                 )
             )
             return list(result.scalars().all())
