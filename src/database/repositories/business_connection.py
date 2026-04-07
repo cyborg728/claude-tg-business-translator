@@ -2,6 +2,8 @@ from abc import abstractmethod
 
 from sqlalchemy import select, update
 
+from sqlmodel import col
+
 from ..models import BusinessConnectionRecord
 from .base import BaseRepository
 
@@ -53,7 +55,7 @@ class BusinessConnectionRepository(IBusinessConnectionRepository):
         async with self._session() as sess:
             await sess.execute(
                 update(BusinessConnectionRecord)
-                .where(BusinessConnectionRecord.connection_id == connection_id)
+                .where(col(BusinessConnectionRecord.connection_id) == connection_id)
                 .values(is_enabled=enabled)
             )
 
