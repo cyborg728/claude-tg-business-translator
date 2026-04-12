@@ -1,0 +1,19 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: tg-bot
+
+resources:
+  - namespace.yaml
+  - configmap.yaml
+  - secret.yaml.example   # copy to secret.yaml and fill in; keep out of git
+  - pvc.yaml
+  - redis.yaml
+  - rabbitmq.yaml
+  - worker-tasks.yaml
+  - worker-delivery.yaml
+  - migrate-job.yaml
+  - backup-cronjobs.yaml
+
+commonLabels:
+  app.kubernetes.io/part-of: tg-business-bot

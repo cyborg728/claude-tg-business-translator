@@ -1,0 +1,19 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: tg-bot
+
+resources:
+  - ../../base
+  - bot-polling.yaml
+
+# Force MODE=polling regardless of base configmap value.
+configMapGenerator:
+  - name: tg-bot-config
+    behavior: merge
+    literals:
+      - MODE=polling
+
+# Kustomize otherwise hashes generated configmaps; keep the stable name.
+generatorOptions:
+  disableNameSuffixHash: true

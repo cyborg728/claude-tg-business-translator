@@ -1,0 +1,37 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: worker-tasks
+spec:
+  replicas: 2
+  selector:
+    matchLabels: { app: worker-tasks }
+  template:
+    metadata:
+      labels: { app: worker-tasks }
+    spec:
+      containers:
+        - name: worker
+          image: tg-business-bot:latest
+          imagePullPolicy: IfNotPresent
+          command:
+            - celery
+            - -A
+            - src.tasks.celery_app
+            - worker
+            - -Q
+            - tasks_queue
+            - --loglevel=INFO
+            - --concurrency=4
+          envFrom:
+            - configMapRef: { name: tg-bot-config }
+            - secretRef: { name: tg-bot-secrets }
+          volumeMounts:
+            - { name: data, mountPath: /app/data }
+          resources:
+            requests: { cpu: 100m, memory: 192Mi }
+            limits: { cpu: 1, memory: 512Mi }
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: tg-bot-data

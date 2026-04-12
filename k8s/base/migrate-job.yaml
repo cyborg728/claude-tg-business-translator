@@ -1,0 +1,24 @@
+# One-shot Alembic upgrade. Re-create to re-run.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: tg-bot-migrate
+spec:
+  backoffLimit: 3
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: alembic
+          image: tg-business-bot:latest
+          imagePullPolicy: IfNotPresent
+          command: ["alembic", "upgrade", "head"]
+          envFrom:
+            - configMapRef: { name: tg-bot-config }
+            - secretRef: { name: tg-bot-secrets }
+          volumeMounts:
+            - { name: data, mountPath: /app/data }
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: tg-bot-data

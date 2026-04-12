@@ -1,0 +1,89 @@
+# Local development stack — run `docker compose up` to get the full pipeline.
+
+services:
+  rabbitmq:
+    image: rabbitmq:3.13-management
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    environment:
+      RABBITMQ_DEFAULT_USER: guest
+      RABBITMQ_DEFAULT_PASS: guest
+    volumes:
+      - rabbitmq-data:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7.4-alpine
+    ports:
+      - "6379:6379"
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "PING"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+
+  bot:
+    build: .
+    env_file: .env
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - bot-data:/app/data
+    command: ["sh", "-c", "alembic upgrade head && python main.py"]
+    ports:
+      # Only needed in webhook mode.
+      - "8080:8080"
+
+  worker-tasks:
+    build: .
+    env_file: .env
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - bot-data:/app/data
+    command:
+      - celery
+      - -A
+      - src.tasks.celery_app
+      - worker
+      - -Q
+      - tasks_queue
+      - --loglevel=INFO
+      - --concurrency=4
+
+  worker-delivery:
+    build: .
+    env_file: .env
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    command:
+      - celery
+      - -A
+      - src.tasks.celery_app
+      - worker
+      - -Q
+      - delivery_queue
+      - --loglevel=INFO
+      - --concurrency=2
+
+volumes:
+  rabbitmq-data:
+  redis-data:
+  bot-data:

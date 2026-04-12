@@ -1,0 +1,74 @@
+# Daily backups for SQLite DB and RabbitMQ definitions.
+# Both land on the tg-bot-backups PVC; rotate with the included `find -mtime`.
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: backup-sqlite
+spec:
+  schedule: "15 2 * * *"           # 02:15 UTC every day
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          restartPolicy: OnFailure
+          containers:
+            - name: sqlite-backup
+              image: alpine:3.20
+              command: ["/bin/sh", "-c"]
+              args:
+                - |
+                  set -euo pipefail
+                  apk add --no-cache sqlite
+                  TS=$(date -u +%Y%m%dT%H%M%SZ)
+                  OUT=/backup/sqlite-$TS.db
+                  echo "Backing up $DATABASE_PATH → $OUT"
+                  sqlite3 "$DATABASE_PATH" ".backup '$OUT'"
+                  gzip -9 "$OUT"
+                  # Keep last 14 daily snapshots
+                  find /backup -name 'sqlite-*.db.gz' -mtime +14 -delete
+              envFrom:
+                - configMapRef: { name: tg-bot-config }
+              volumeMounts:
+                - { name: data, mountPath: /app/data }
+                - { name: backup, mountPath: /backup }
+          volumes:
+            - { name: data, persistentVolumeClaim: { claimName: tg-bot-data } }
+            - { name: backup, persistentVolumeClaim: { claimName: tg-bot-backups } }
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: backup-rabbitmq
+spec:
+  schedule: "30 2 * * *"           # 02:30 UTC every day
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          restartPolicy: OnFailure
+          containers:
+            - name: rabbitmq-backup
+              image: curlimages/curl:8.10.1
+              command: ["/bin/sh", "-c"]
+              args:
+                - |
+                  set -eu
+                  TS=$(date -u +%Y%m%dT%H%M%SZ)
+                  OUT=/backup/rabbitmq-$TS.json
+                  echo "Exporting RabbitMQ definitions → $OUT"
+                  curl -sSf -u guest:guest \
+                    http://rabbitmq:15672/api/definitions > "$OUT"
+                  gzip -9 "$OUT"
+                  # Keep last 30 days of RabbitMQ definitions
+                  find /backup -name 'rabbitmq-*.json.gz' -mtime +30 -delete
+              volumeMounts:
+                - { name: backup, mountPath: /backup }
+          volumes:
+            - { name: backup, persistentVolumeClaim: { claimName: tg-bot-backups } }

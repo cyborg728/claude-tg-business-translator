@@ -1,0 +1,21 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: tg-bot
+
+resources:
+  - ../../base
+  - bot-webhook.yaml
+  - bot-service.yaml
+  - bot-ingress.yaml
+
+# Force MODE=webhook and the domain used for the Telegram webhook URL.
+configMapGenerator:
+  - name: tg-bot-config
+    behavior: merge
+    literals:
+      - MODE=webhook
+      - WEBHOOK_BASE_URL=https://example.f8f.dev
+
+generatorOptions:
+  disableNameSuffixHash: true

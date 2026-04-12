@@ -1,0 +1,291 @@
+# Telegram Business Bot — v2
+
+Foundational scaffolding for a Telegram Business Account bot. Built around
+**python-telegram-bot 22.x**, **Celery + RabbitMQ**, **Redis**, **SQLite +
+Alembic** and **Fluent** for i18n. Every piece is swappable — all repositories
+sit behind interfaces, so moving off SQLite (to Postgres, for example) is a
+matter of adding a sibling package under `src/databases/`.
+
+---
+
+## ✨ What's inside
+
+| Feature                                | How it's implemented                                              |
+| -------------------------------------- | ----------------------------------------------------------------- |
+| Commands `/start`, `/test_queue`       | `src/bot/handlers/`, dispatched non-blocking                      |
+| Commands `/redis_save`, `/redis_read`  | Ephemeral text stash via async Redis                              |
+| Polling ⇄ Webhook switch               | `MODE=polling|webhook` in `.env` / ConfigMap                      |
+| Multi-language                         | `fluent.runtime`, auto-picks the user's Telegram `language_code`  |
+| Task queue (`tasks_queue`)             | Celery worker processes slow work                                 |
+| Delivery queue (`delivery_queue`)      | Celery worker with per-sec / per-chat rate limits in Redis        |
+| Business accounts (`business_message`) | `BusinessConnectionHandler` + dedicated `MessageHandler` filter   |
+| Error handling                         | Global `error_handler` + catch-all `/unknown` handler             |
+| UUID v7 primary keys                   | `uuid_utils.uuid7` via `src/utils/ids.py`                         |
+| Alembic migrations                     | `alembic/versions/0001_initial_schema.py`                         |
+| k3s manifests                          | Kustomize `base/` + `overlays/polling` + `overlays/webhook`       |
+| DB & RabbitMQ backups                  | CronJobs to a dedicated PVC; local shell equivalents in `scripts` |
+
+---
+
+## 🗂 Project layout
+
+```
+.
+├── main.py                       # Entrypoint (reads MODE and runs polling/webhook)
+├── alembic/                      # Alembic migrations
+│   ├── env.py                    # Uses settings.database_url_sync
+│   └── versions/0001_initial_schema.py
+├── alembic.ini
+├── requirements.txt
+├── Dockerfile
+├── docker-compose.yml            # Local dev stack: bot + workers + RabbitMQ + Redis
+├── .env.example                  # Copy to .env
+├── scripts/
+│   ├── backup_sqlite.sh
+│   └── backup_rabbitmq.sh
+├── k8s/
+│   ├── base/                     # Namespace, ConfigMap, Secret, PVCs, Redis, RabbitMQ,
+│   │                             # worker deployments, migrate Job, backup CronJobs
+│   └── overlays/
+│       ├── polling/              # MODE=polling — single-replica bot Deployment
+│       └── webhook/              # MODE=webhook — bot Deployment + Service + Ingress
+└── src/
+    ├── config/settings.py        # Pydantic Settings (single source of truth)
+    ├── bot/
+    │   ├── application.py        # PTB ApplicationBuilder + handlers wiring
+    │   ├── runner.py             # polling / webhook bootstrap
+    │   ├── deps.py               # BotDeps dataclass passed into handlers
+    │   └── handlers/
+    │       ├── commands.py       # /start + unknown
+    │       ├── queue_cmd.py      # /test_queue
+    │       ├── redis_cmd.py      # /redis_save, /redis_read
+    │       ├── business.py       # business_connection + business_message
+    │       └── errors.py         # global error handler
+    ├── cache/redis_client.py     # async redis — /redis_save, /redis_read, save-flag
+    ├── databases/
+    │   ├── factory.py            # Picks the backend from settings.database_backend
+    │   ├── interfaces/           # AbstractDatabase + I<Entity>Repository (backend-agnostic)
+    │   └── sqlite/               # SQLite implementation: models + repositories + db
+    ├── i18n/
+    │   ├── translator.py         # Fluent-based per-user translator
+    │   └── locales/
+    │       ├── en/main.ftl
+    │       └── ru/main.ftl
+    ├── tasks/
+    │   ├── celery_app.py         # Celery app + queue routing
+    │   ├── processing.py         # Heavy work → tasks_queue
+    │   └── delivery.py           # Rate-limited send → delivery_queue
+    └── utils/ids.py              # uuid7 / uuid7_str helpers
+```
+
+Adding a new database backend? Create `src/databases/postgres/` that mirrors
+`src/databases/sqlite/`, implement the same `AbstractDatabase` + `I*Repository`
+classes and register it in `src/databases/factory.py`. No handler code changes.
+
+---
+
+## 🚀 Quick start (local)
+
+```bash
+cp .env.example .env
+# edit .env: set TELEGRAM_BOT_TOKEN
+
+# Option A — Docker Compose (full stack)
+docker compose up --build
+
+# Option B — bare metal
+python -m venv .venv && source .venv/bin/activate
+pip install -r requirements.txt
+alembic upgrade head
+# in 3 terminals:
+python main.py                                                  # bot
+celery -A src.tasks.celery_app worker -Q tasks_queue -c 4      # processing worker
+celery -A src.tasks.celery_app worker -Q delivery_queue -c 2   # delivery worker
+```
+
+Ensure you have RabbitMQ and Redis running locally (Docker Compose does it
+for you).
+
+Try the commands in your Telegram client:
+
+| Command         | Effect                                                            |
+| --------------- | ----------------------------------------------------------------- |
+| `/start`        | Stores / refreshes your user row and sends a localized greeting   |
+| `/test_queue`   | Replies "queued", Celery worker sleeps 5s, delivery worker sends `success` |
+| `/redis_save`   | Puts you in "save mode" — next text message is stored in Redis    |
+| `/redis_read`   | Reads back the text you last saved                                |
+
+---
+
+## 🌍 i18n
+
+Strings live in `src/i18n/locales/<locale>/main.ftl` (Project Fluent syntax).
+The translator auto-discovers every directory at startup; add a new language
+by dropping in `src/i18n/locales/de/main.ftl` — no code change needed.
+
+The bot resolves the user's locale per message using Telegram's
+`User.language_code`. First-time users get their own language automatically;
+returning users inherit whatever we persisted in `users.language_code`.
+
+---
+
+## 🗃 Database & migrations
+
+SQLite is the only backend shipped, but every repository implements an
+interface in `src/databases/interfaces/` so the bot never imports SQLAlchemy
+directly. Primary keys are UUID v7 strings (36 chars) — monotonic timestamps
+embedded in the high bits keep B-tree inserts fast while still being globally
+unique.
+
+```bash
+# create a new revision after editing a model
+alembic revision --autogenerate -m "add foo column"
+
+# apply
+alembic upgrade head
+
+# rollback
+alembic downgrade -1
+```
+
+`alembic/env.py` reads the URL from `settings.database_url_sync`, so it works
+from both CLI and the k3s `migrate-job.yaml`.
+
+---
+
+## 📨 Queues
+
+```
+┌─────────┐  enqueue  ┌──────────────┐  compute  ┌────────────┐  enqueue  ┌──────────────────┐  rate-limited  ┌──────────┐
+│  bot    ├──────────▶│ tasks_queue   ├──────────▶│  worker    ├──────────▶│ delivery_queue   ├───────────────▶│ Telegram │
+│  (PTB)  │           │  (RabbitMQ)   │           │ processing │           │  (RabbitMQ)      │                │   API    │
+└─────────┘           └──────────────┘           └────────────┘           └──────────────────┘                └──────────┘
+```
+
+The delivery worker enforces two rolling-second counters in Redis:
+
+* `DELIVERY_RATE_PER_SECOND` — global (Telegram's ≈30 msg/s ceiling).
+* `DELIVERY_RATE_PER_CHAT`   — per chat (Telegram's ≈1 msg/s/chat ceiling).
+
+When a budget is exhausted, the task sleeps briefly and re-checks; if no slot
+frees up within 5 s, the task is re-queued with exponential backoff.
+
+---
+
+## 🎛 Polling vs Webhook
+
+Switch via `MODE`:
+
+```bash
+# development
+MODE=polling python main.py
+
+# production
+MODE=webhook \
+WEBHOOK_BASE_URL=https://example.f8f.dev \
+WEBHOOK_SECRET_TOKEN=... \
+python main.py
+```
+
+The runner picks the right code path in `src/bot/runner.py` — nothing else
+changes.
+
+---
+
+## ☸️ k3s deployment
+
+```bash
+# 1. Build & push / load your image so the cluster can pull it.
+docker build -t tg-business-bot:latest .
+docker save tg-business-bot:latest | sudo k3s ctr images import -
+
+# 2. Create the secret (do NOT commit the filled-in file).
+cp k8s/base/secret.yaml.example k8s/base/secret.yaml
+$EDITOR k8s/base/secret.yaml
+
+# 3. Pick a mode and apply via kustomize.
+kubectl apply -k k8s/overlays/polling     # polling
+#  — or —
+kubectl apply -k k8s/overlays/webhook     # webhook
+
+# 4. Run migrations (idempotent).
+kubectl -n tg-bot delete job tg-bot-migrate --ignore-not-found
+kubectl -n tg-bot apply -k k8s/overlays/polling     # re-creates the Job
+```
+
+The webhook overlay ships a Traefik Ingress for `example.f8f.dev` — change it
+in both `k8s/base/configmap.yaml` (via the kustomize overlay `WEBHOOK_BASE_URL`
+literal) and `k8s/overlays/webhook/bot-ingress.yaml`. The base domain could
+also live in a Secret if you prefer; by default we keep it in the ConfigMap
+since it's not sensitive — only the bot token / webhook secret token are.
+
+---
+
+## 💾 Backups
+
+### In-cluster (automatic)
+
+`k8s/base/backup-cronjobs.yaml` defines two CronJobs:
+
+* **`backup-sqlite`** — `02:15 UTC` daily. Uses `sqlite3 .backup` (consistent
+  hot-copy), gzips the output into the `tg-bot-backups` PVC, keeps the last
+  14 snapshots.
+* **`backup-rabbitmq`** — `02:30 UTC` daily. Calls `GET /api/definitions` on
+  the RabbitMQ Management plugin (exchanges, queues, bindings, users,
+  policies, vhosts) and stores the gzipped JSON. 30-day retention.
+
+Mount the `tg-bot-backups` PVC read-only into any rsync / restic sidecar to
+ship the files off-cluster.
+
+### Local / ad-hoc
+
+```bash
+./scripts/backup_sqlite.sh                    # backups/sqlite-<ts>.db.gz
+RABBITMQ_MGMT_URL=http://localhost:15672 \
+    ./scripts/backup_rabbitmq.sh              # backups/rabbitmq-<ts>.json.gz
+```
+
+### Full RabbitMQ message backup
+
+Message-level backup is intentionally out of scope for the CronJob — use the
+Shovel plugin (replicate critical queues to a secondary broker) or snapshot
+the `rabbitmq-data` PVC with your storage driver's volume-snapshot feature.
+
+---
+
+## ⚙️ Configuration reference
+
+All options live in `src/config/settings.py`. The full `.env.example` is in
+the repo root. The most important knobs:
+
+| Variable                    | Default                               | Meaning                                         |
+| --------------------------- | ------------------------------------- | ----------------------------------------------- |
+| `TELEGRAM_BOT_TOKEN`        | —                                     | Bot token from @BotFather                       |
+| `MODE`                      | `polling`                             | `polling` or `webhook`                          |
+| `WEBHOOK_BASE_URL`          | `https://example.f8f.dev`             | Public HTTPS URL (no trailing slash)            |
+| `WEBHOOK_PORT`              | `8080`                                | Port the bot binds to                           |
+| `WEBHOOK_SECRET_TOKEN`      | —                                     | Secret header Telegram sends with each webhook  |
+| `DEFAULT_LOCALE`            | `en`                                  | Fallback when user's `language_code` is unknown |
+| `DATABASE_BACKEND`          | `sqlite`                              | Which backend package to load                   |
+| `DATABASE_PATH`             | `data/bot.db`                         | SQLite file                                     |
+| `RABBITMQ_URL`              | `amqp://guest:guest@localhost:5672//` | Celery broker                                   |
+| `QUEUE_TASKS`               | `tasks_queue`                         | Processing queue name                           |
+| `QUEUE_DELIVERY`            | `delivery_queue`                      | Rate-limited sending queue                      |
+| `REDIS_URL`                 | `redis://localhost:6379/0`            | Cache + Celery result backend                   |
+| `REDIS_SAVE_TTL`            | `3600`                                | `/redis_save` expiry (s). 0 = forever           |
+| `DELIVERY_RATE_PER_SECOND`  | `25`                                  | Global send budget (Telegram: ~30/s)            |
+| `DELIVERY_RATE_PER_CHAT`    | `1`                                   | Per-chat budget (Telegram: ~1/s)                |
+
+---
+
+## 🧪 What's NOT here yet (deliberate)
+
+* No feature logic beyond the two demo commands — this commit is the v2 skeleton.
+* No unit tests — the first functional feature lands with tests, so the scaffolding
+  stays honest about what's actually covered.
+
+---
+
+## 📜 License
+
+Internal project. See repository metadata for licensing.

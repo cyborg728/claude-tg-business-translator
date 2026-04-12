@@ -1,0 +1,43 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: bot
+spec:
+  replicas: 1           # Scale horizontally by sharing the PVC (RWX) or
+                        # by moving to Postgres. Only one instance may own
+                        # the Telegram webhook at a time.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels: { app: bot }
+  template:
+    metadata:
+      labels: { app: bot, mode: webhook }
+    spec:
+      containers:
+        - name: bot
+          image: tg-business-bot:latest
+          imagePullPolicy: IfNotPresent
+          command: ["python", "main.py"]
+          ports:
+            - { name: http, containerPort: 8080 }
+          envFrom:
+            - configMapRef: { name: tg-bot-config }
+            - secretRef: { name: tg-bot-secrets }
+          volumeMounts:
+            - { name: data, mountPath: /app/data }
+          resources:
+            requests: { cpu: 100m, memory: 192Mi }
+            limits: { cpu: 1, memory: 512Mi }
+          livenessProbe:
+            tcpSocket: { port: http }
+            initialDelaySeconds: 20
+            periodSeconds: 30
+          readinessProbe:
+            tcpSocket: { port: http }
+            initialDelaySeconds: 10
+            periodSeconds: 10
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: tg-bot-data

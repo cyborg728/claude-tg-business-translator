@@ -1,0 +1,29 @@
+# ── Telegram bot ─────────────────────────────────────────────────────────────
+python-telegram-bot[webhooks,rate-limiter]==22.6
+
+# ── Config ───────────────────────────────────────────────────────────────────
+pydantic>=2.11.0
+pydantic-settings>=2.14.0
+
+# ── Database (async SQLAlchemy + SQLite + migrations) ───────────────────────
+SQLAlchemy>=2.0.46
+aiosqlite>=0.22.1
+alembic>=1.16.0
+greenlet>=3.1.0
+
+# ── Task queue (Celery + RabbitMQ broker / Redis result backend) ────────────
+celery>=5.5.3
+kombu>=5.5.0
+amqp>=5.3.0
+
+# ── Redis (cache + Celery result backend + rate-limit window) ───────────────
+redis[hiredis]>=5.2.1
+
+# ── i18n ────────────────────────────────────────────────────────────────────
+fluent.runtime>=0.4.0
+
+# ── UUID v7 ─────────────────────────────────────────────────────────────────
+uuid-utils>=0.10.0
+
+# ── HTTP (for webhook set-up and misc) ──────────────────────────────────────
+httpx>=0.28.0

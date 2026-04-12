@@ -1,0 +1,31 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: tg-bot-config
+data:
+  # ── Bot mode (overlays override this) ───────────────────────────────────────
+  MODE: "polling"
+
+  # ── i18n ────────────────────────────────────────────────────────────────────
+  DEFAULT_LOCALE: "en"
+
+  # ── Database ────────────────────────────────────────────────────────────────
+  DATABASE_BACKEND: "sqlite"
+  DATABASE_PATH: "/app/data/bot.db"
+
+  # ── RabbitMQ / Celery ───────────────────────────────────────────────────────
+  RABBITMQ_URL: "amqp://guest:guest@rabbitmq:5672//"
+  QUEUE_TASKS: "tasks_queue"
+  QUEUE_DELIVERY: "delivery_queue"
+
+  # ── Redis ───────────────────────────────────────────────────────────────────
+  REDIS_URL: "redis://redis:6379/0"
+  REDIS_SAVE_TTL: "3600"
+
+  # ── Delivery rate-limit ─────────────────────────────────────────────────────
+  DELIVERY_RATE_PER_SECOND: "25"
+  DELIVERY_RATE_PER_CHAT: "1"
+
+  # ── Webhook (overrideable via overlay + Ingress host) ───────────────────────
+  WEBHOOK_BASE_URL: "https://example.f8f.dev"
+  WEBHOOK_PORT: "8080"
