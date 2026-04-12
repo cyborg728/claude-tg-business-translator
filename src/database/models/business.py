@@ -1,19 +1,18 @@
-from sqlalchemy import BigInteger, Boolean, Column, Integer, String, Text
-
-from sqlmodel import Field
+from sqlalchemy import BigInteger, Boolean, Integer, String, Text
+from sqlalchemy.orm import Mapped, mapped_column
 
 from .base import Base, CreatedAtMixin, TimestampMixin
 
 
-class BusinessConnectionRecord(TimestampMixin, Base, table=True):
+class BusinessConnectionRecord(TimestampMixin, Base):
     """Stores Telegram Business Connection events."""
 
     __tablename__ = "business_connections"
 
-    connection_id: str = Field(sa_column=Column(String(255), primary_key=True))
+    connection_id: Mapped[str] = mapped_column(String(255), primary_key=True)
     # In Telegram, private chat_id == user_id, so one field is enough.
-    owner_chat_id: int = Field(sa_column=Column(BigInteger, nullable=False))
-    is_enabled: bool = Field(default=True, sa_column=Column(Boolean, default=True, nullable=False))
+    owner_chat_id: Mapped[int] = mapped_column(BigInteger)
+    is_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
 
     def __repr__(self) -> str:
         return (
@@ -22,7 +21,7 @@ class BusinessConnectionRecord(TimestampMixin, Base, table=True):
         )
 
 
-class MessageMapping(CreatedAtMixin, Base, table=True):
+class MessageMapping(CreatedAtMixin, Base):
     """Maps each bot-notification message to its business-conversation context.
 
     When the owner replies to a notification message the bot sent, this table
@@ -32,34 +31,28 @@ class MessageMapping(CreatedAtMixin, Base, table=True):
 
     __tablename__ = "message_mappings"
 
-    id: int | None = Field(
-        default=None, sa_column=Column(Integer, primary_key=True, autoincrement=True)
-    )
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
 
     # Business connection under which the original user message arrived.
-    business_connection_id: str = Field(sa_column=Column(String(255), nullable=False))
+    business_connection_id: Mapped[str] = mapped_column(String(255))
 
     # Telegram user who sent the original message.
-    user_id: int = Field(sa_column=Column(BigInteger, nullable=False))
+    user_id: Mapped[int] = mapped_column(BigInteger)
 
     # Chat ID used to send a reply back to the user via the business connection.
-    user_chat_id: int = Field(sa_column=Column(BigInteger, nullable=False))
+    user_chat_id: Mapped[int] = mapped_column(BigInteger)
 
     # Message ID of the user's original message (in the user's chat).
-    original_message_id: int = Field(sa_column=Column(Integer, nullable=False))
+    original_message_id: Mapped[int] = mapped_column(Integer)
 
     # Message ID of the notification the bot sent to the owner's DM chat.
-    notification_message_id: int = Field(
-        sa_column=Column(Integer, nullable=False, index=True)
-    )
+    notification_message_id: Mapped[int] = mapped_column(Integer, index=True)
 
-    original_text: str = Field(sa_column=Column(Text, nullable=False))
-    translated_text: str = Field(sa_column=Column(Text, nullable=False))
+    original_text: Mapped[str] = mapped_column(Text)
+    translated_text: Mapped[str] = mapped_column(Text)
 
     # Language of the user (to translate owner replies back into).
-    user_language: str | None = Field(
-        default=None, sa_column=Column(String(10), nullable=True)
-    )
+    user_language: Mapped[str | None] = mapped_column(String(10), nullable=True)
 
     def __repr__(self) -> str:
         return (

@@ -1,26 +1,22 @@
 from datetime import datetime
-from typing import Optional
 
-from sqlalchemy import BigInteger, Column, DateTime, String, func
-
-from sqlmodel import Field
+from sqlalchemy import BigInteger, DateTime, String, func
+from sqlalchemy.orm import Mapped, mapped_column
 
 from .base import Base, TimestampMixin
 
 
-class UserRecord(TimestampMixin, Base, table=True):
+class UserRecord(TimestampMixin, Base):
     """Caches Telegram user info and their detected language."""
 
     __tablename__ = "users"
 
-    user_id: int = Field(sa_column=Column(BigInteger, primary_key=True))
-    username: Optional[str] = Field(default=None, sa_column=Column(String(255), nullable=True))
-    first_name: str = Field(sa_column=Column(String(255), nullable=False))
-    last_name: Optional[str] = Field(default=None, sa_column=Column(String(255), nullable=True))
+    user_id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    username: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    first_name: Mapped[str] = mapped_column(String(255))
+    last_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
     # ISO 639-1 code from Telegram profile or auto-detected via Gemini.
-    language_code: Optional[str] = Field(
-        default=None, sa_column=Column(String(10), nullable=True)
-    )
+    language_code: Mapped[str | None] = mapped_column(String(10), nullable=True)
 
     @property
     def full_name(self) -> str:
@@ -32,7 +28,7 @@ class UserRecord(TimestampMixin, Base, table=True):
         return f"UserRecord(id={self.user_id}, name={self.first_name!r})"
 
 
-class AllowedUser(Base, table=True):
+class AllowedUser(Base):
     """Username whitelist per owner: only translate messages from users in this table.
 
     If the table has no entries for a given owner, translation applies to nobody.
@@ -42,18 +38,18 @@ class AllowedUser(Base, table=True):
     __tablename__ = "allowed_users"
 
     # The bot-chat ID of the owner who manages this whitelist.
-    owner_chat_id: int = Field(sa_column=Column(BigInteger, primary_key=True))
+    owner_chat_id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
     # Stored in lowercase, without the leading @.
-    username: str = Field(sa_column=Column(String(32), primary_key=True))
-    added_at: Optional[datetime] = Field(
-        default=None, sa_column=Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    username: Mapped[str] = mapped_column(String(32), primary_key=True)
+    added_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
     )
 
     def __repr__(self) -> str:
         return f"AllowedUser(owner={self.owner_chat_id}, username={self.username!r})"
 
 
-class AuthorizedUser(Base, table=True):
+class AuthorizedUser(Base):
     """Users (other than the main owner) who are allowed to use the bot.
 
     The main owner manages this list via /translator → Access.
@@ -62,9 +58,9 @@ class AuthorizedUser(Base, table=True):
 
     __tablename__ = "authorized_users"
 
-    username: str = Field(sa_column=Column(String(32), primary_key=True))
-    added_at: Optional[datetime] = Field(
-        default=None, sa_column=Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    username: Mapped[str] = mapped_column(String(32), primary_key=True)
+    added_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
     )
 
     def __repr__(self) -> str:

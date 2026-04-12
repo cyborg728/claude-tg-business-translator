@@ -9,7 +9,7 @@ from sqlalchemy.ext.asyncio import (
     create_async_engine,
 )
 
-from sqlmodel import SQLModel
+from .models import Base
 
 
 class Database:
@@ -41,7 +41,7 @@ class Database:
         )
 
         async with self._engine.begin() as conn:
-            await conn.run_sync(SQLModel.metadata.create_all)
+            await conn.run_sync(Base.metadata.create_all)
 
     async def disconnect(self) -> None:
         """Dispose the engine and release all connections."""
