@@ -1,11 +1,11 @@
 from datetime import datetime
 from typing import Optional
 
-from sqlalchemy import BigInteger, Column, DateTime, String
+from sqlalchemy import BigInteger, Column, DateTime, String, func
 
 from sqlmodel import Field
 
-from .base import Base, TimestampMixin, _utcnow
+from .base import Base, TimestampMixin
 
 
 class UserRecord(TimestampMixin, Base, table=True):
@@ -46,7 +46,7 @@ class AllowedUser(Base, table=True):
     # Stored in lowercase, without the leading @.
     username: str = Field(sa_column=Column(String(32), primary_key=True))
     added_at: Optional[datetime] = Field(
-        default=None, sa_column=Column(DateTime, default=_utcnow, nullable=False)
+        default=None, sa_column=Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     )
 
     def __repr__(self) -> str:
@@ -64,7 +64,7 @@ class AuthorizedUser(Base, table=True):
 
     username: str = Field(sa_column=Column(String(32), primary_key=True))
     added_at: Optional[datetime] = Field(
-        default=None, sa_column=Column(DateTime, default=_utcnow, nullable=False)
+        default=None, sa_column=Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     )
 
     def __repr__(self) -> str:
