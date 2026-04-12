@@ -99,7 +99,6 @@ class BusinessHandlers:
 
         record = BusinessConnectionRecord(
             connection_id=bc.id,
-            owner_user_id=bc.user.id,
             owner_chat_id=bc.user_chat_id,
             is_enabled=bc.is_enabled,
         )

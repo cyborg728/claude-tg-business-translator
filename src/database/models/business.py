@@ -11,15 +11,14 @@ class BusinessConnectionRecord(TimestampMixin, Base, table=True):
     __tablename__ = "business_connections"
 
     connection_id: str = Field(sa_column=Column(String(255), primary_key=True))
-    owner_user_id: int = Field(sa_column=Column(BigInteger, nullable=False))
-    # Chat between the bot and the business-account user (for DM notifications).
+    # In Telegram, private chat_id == user_id, so one field is enough.
     owner_chat_id: int = Field(sa_column=Column(BigInteger, nullable=False))
     is_enabled: bool = Field(default=True, sa_column=Column(Boolean, default=True, nullable=False))
 
     def __repr__(self) -> str:
         return (
             f"BusinessConnectionRecord(id={self.connection_id!r}, "
-            f"owner={self.owner_user_id}, enabled={self.is_enabled})"
+            f"owner={self.owner_chat_id}, enabled={self.is_enabled})"
         )
 
 
