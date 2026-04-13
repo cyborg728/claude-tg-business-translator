@@ -171,6 +171,51 @@ The delivery worker enforces two rolling-second counters in Redis:
 When a budget is exhausted, the task sleeps briefly and re-checks; if no slot
 frees up within 5 s, the task is re-queued with exponential backoff.
 
+### Sending messages: generic task + facade
+
+`src/tasks/delivery.py` exposes **one Celery task** — `deliver(method, payload)` —
+and a handful of ergonomic wrappers on top of it.
+
+```python
+from src.tasks.delivery import send_text, send_photo, edit_text, deliver
+
+# Text with inline buttons
+send_text(
+    chat_id,
+    "Pick one:",
+    reply_markup={"inline_keyboard": [[{"text": "A", "callback_data": "a"}]]},
+)
+
+# Photo by URL or file_id, with caption
+send_photo(chat_id, "https://example.com/cat.jpg", caption="<b>cat</b>")
+
+# Edit an existing message
+edit_text(chat_id, message_id, "updated")
+
+# Anything the facade doesn't cover — call the generic task directly
+deliver.delay(method="sendMediaGroup", payload={
+    "chat_id": chat_id,
+    "media": [{"type": "photo", "media": "file_id_1"}, ...],
+})
+deliver.delay(method="answerCallbackQuery", payload={
+    "callback_query_id": cbq_id, "text": "done"})
+```
+
+Why this shape:
+
+* **One task**, one place to own rate-limiting, retries, 429 handling and
+  Bot API error parsing. Adding a new Bot API call does not require a new
+  Celery task or new routing.
+* The **facade** (`send_text` / `send_photo` / `edit_text`) exists purely
+  for ergonomics — callers shouldn't have to remember method strings or
+  build payloads by hand. Add helpers freely; keep them one-liners over
+  `deliver.delay(...)`.
+* Chat-less Bot API methods (`answerCallbackQuery`, `answerInlineQuery`)
+  skip the per-chat budget automatically — only the global budget applies.
+* Raw file uploads (`multipart/form-data`) are intentionally out of scope.
+  The Right Way with Telegram is to upload a file once and reuse its
+  `file_id` — which travels through the standard JSON payload.
+
 ---
 
 ## 🎛 Polling vs Webhook
@@ -327,11 +372,13 @@ The runner uses `pyproject.toml [tool.pytest.ini_options]`:
 | Session rollback              | `tests/integration/test_session_rollback.py`                  | exception inside session must roll back             |
 | Redis cache                   | `tests/integration/test_redis_cache.py`                       | save/read, wait flag, TTL semantics (via fakeredis) |
 | Alembic migrations            | `tests/integration/test_alembic_migrations.py`                | upgrade head, downgrade base, idempotent re-run     |
+| Delivery facade               | `tests/unit/test_delivery_facade.py`                          | `send_text` / `send_photo` / `edit_text` payloads   |
+| Delivery task                 | `tests/integration/test_delivery_task.py`                     | routing, rate-limit acquisition, 429 → Retry, 5xx   |
 
 ### What's NOT tested yet (lands with the first real feature)
 
 * PTB handlers (`/start`, `/test_queue`, `/redis_*`, business, errors)
-* Celery `processing.test_queue` and the rate-limited `delivery.deliver_message`
+* Celery `processing.test_queue` (the blocking sleep + chain-to-delivery)
 * End-to-end smoke (Docker Compose / kubectl kustomize)
 
 ---

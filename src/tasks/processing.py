@@ -10,7 +10,7 @@ import logging
 import time
 
 from .celery_app import celery_app
-from .delivery import deliver_message
+from .delivery import send_text
 
 logger = logging.getLogger(__name__)
 
@@ -36,4 +36,4 @@ def test_queue(self, chat_id: int, locale: str, delay_s: int = 5) -> None:
     time.sleep(delay_s)
 
     text = get_translator().gettext("queue-success", locale=locale)
-    deliver_message.delay(chat_id=chat_id, text=text)
+    send_text(chat_id, text)
