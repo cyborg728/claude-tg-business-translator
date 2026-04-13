@@ -24,6 +24,7 @@ matter of adding a sibling package under `src/databases/`.
 | Alembic migrations                     | `alembic/versions/0001_initial_schema.py`                         |
 | k3s manifests                          | Kustomize `base/` + `overlays/polling` + `overlays/webhook`       |
 | DB & RabbitMQ backups                  | CronJobs to a dedicated PVC; local shell equivalents in `scripts` |
+| Test suite                             | `pytest` — unit + SQLite + fakeredis + Alembic (see "Tests")      |
 
 ---
 
@@ -278,11 +279,60 @@ the repo root. The most important knobs:
 
 ---
 
-## 🧪 What's NOT here yet (deliberate)
+## 🧪 Tests
 
-* No feature logic beyond the two demo commands — this commit is the v2 skeleton.
-* No unit tests — the first functional feature lands with tests, so the scaffolding
-  stays honest about what's actually covered.
+The suite covers the foundation: pure logic, persistence, Redis cache and the
+Alembic upgrade chain. PTB handlers and Celery tasks intentionally stay
+uncovered for now — they get tested alongside the first real feature. Anything
+in `src/bot/runner.py` and `main.py` is excluded from coverage in
+`pyproject.toml` (boot wiring).
+
+### Install & run
+
+```bash
+python -m venv .venv && source .venv/bin/activate
+pip install -r requirements-dev.txt
+
+# Run the whole suite (quiet, fail-fast on warnings)
+pytest
+
+# Or with coverage report
+pytest --cov
+
+# Subset
+pytest tests/unit                                       # fast, no I/O
+pytest tests/integration                                # in-memory SQLite + fakeredis + alembic
+pytest tests/integration/test_alembic_migrations.py     # single file
+pytest -k "test_pick_locale"                            # by name
+```
+
+The runner uses `pyproject.toml [tool.pytest.ini_options]`:
+* `asyncio_mode = "auto"` — `async def test_*` functions are awaited automatically.
+* `filterwarnings = ["error", …]` — most warnings are errors; only fluent-runtime's
+  ResourceWarning and a handful of upstream deprecations are ignored.
+* `pythonpath = ["."]` — so `src.*` imports resolve without an editable install.
+
+### What's tested
+
+| Layer                         | File                                                          | Notes                                               |
+| ----------------------------- | ------------------------------------------------------------- | --------------------------------------------------- |
+| UUID v7 generator             | `tests/unit/test_uuid7.py`                                    | version bits, monotonicity, fallback path           |
+| Pydantic Settings             | `tests/unit/test_settings.py`                                 | validators, derived URLs, webhook constraint        |
+| i18n translator               | `tests/unit/test_translator.py`                               | locale picker, gettext, fallbacks                   |
+| Bot DTO converter             | `tests/unit/test_bot_utils.py`                                | `dto_from_telegram_user`                            |
+| User repository (SQLite)      | `tests/integration/test_sqlite_user_repository.py`            | upsert, get, set_language, language preservation    |
+| Business-conn repo (SQLite)   | `tests/integration/test_sqlite_business_repository.py`        | upsert/get/set_enabled/delete                       |
+| Message-mapping repo (SQLite) | `tests/integration/test_sqlite_message_mapping_repository.py` | add + get_by_notification_id                        |
+| KV-store repo (SQLite)        | `tests/integration/test_sqlite_kv_repository.py`              | set/get/delete + isolation by owner                 |
+| Session rollback              | `tests/integration/test_session_rollback.py`                  | exception inside session must roll back             |
+| Redis cache                   | `tests/integration/test_redis_cache.py`                       | save/read, wait flag, TTL semantics (via fakeredis) |
+| Alembic migrations            | `tests/integration/test_alembic_migrations.py`                | upgrade head, downgrade base, idempotent re-run     |
+
+### What's NOT tested yet (lands with the first real feature)
+
+* PTB handlers (`/start`, `/test_queue`, `/redis_*`, business, errors)
+* Celery `processing.test_queue` and the rate-limited `delivery.deliver_message`
+* End-to-end smoke (Docker Compose / kubectl kustomize)
 
 ---
 

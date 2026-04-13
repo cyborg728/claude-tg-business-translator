@@ -3,7 +3,7 @@ python-telegram-bot[webhooks,rate-limiter]==22.6
 
 # ── Config ───────────────────────────────────────────────────────────────────
 pydantic>=2.11.0
-pydantic-settings>=2.14.0
+pydantic-settings>=2.13.0
 
 # ── Database (async SQLAlchemy + SQLite + migrations) ───────────────────────
 SQLAlchemy>=2.0.46
