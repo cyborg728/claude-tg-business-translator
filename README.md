@@ -1,10 +1,85 @@
-# Telegram Business Bot — v2
+# Telegram Business Bot — v3
 
 Foundational scaffolding for a Telegram Business Account bot. Built around
 **python-telegram-bot 22.x**, **Celery + RabbitMQ**, **Redis**, **SQLite +
 Alembic** and **Fluent** for i18n. Every piece is swappable — all repositories
 sit behind interfaces, so moving off SQLite (to Postgres, for example) is a
 matter of adding a sibling package under `src/databases/`.
+
+> **v3 status — in progress.** v3 inherits the v2 code as-is and adds
+> horizontal scalability: the webhook receiver is split out from the PTB
+> handler process, updates are sharded by `chat_id` into RabbitMQ, and
+> delivery is token-bucketed against Telegram's global / per-chat rate
+> limits. See [`MIGRATION_V2_TO_V3.md`](./MIGRATION_V2_TO_V3.md) for the
+> step-by-step plan and [🎯 v3 — horizontal scaling](#-v3--horizontal-scaling)
+> below for the target architecture.
+
+---
+
+## 🎯 v3 — horizontal scaling
+
+v2 works, but has two bottlenecks baked in:
+
+1. **Webhook + handlers live in the same process.** PTB's webhook server
+   and every handler share one event loop. A long LLM call behind `/start`
+   can delay the 200 OK to Telegram → retries → duplicate work.
+2. **Bot Deployment is single-replica on purpose.** Telegram allows exactly
+   one webhook URL, and PTB is stateful (update offsets, per-chat locks
+   inside the process). Scaling the current `bot` Deployment past 1 replica
+   breaks ordering and duplicates sends.
+
+v3 removes both by splitting responsibilities across three tiers, all
+stateless except the brokers:
+
+```
+Telegram ─HTTPS─▶ Ingress ─▶ webhook-receiver (Deployment, HPA)
+                                     │  publish(update, key=chat_id)
+                                     ▼
+                              RabbitMQ (consistent-hash exchange → N chat-shards)
+                                     │
+                 ┌───────────────────┴───────────────────┐
+                 ▼                                       ▼
+         worker-tasks                              worker-delivery
+       (PTB handlers + LLM,                      (generic deliver task,
+        HPA on queue depth)                       Redis token-bucket,
+                 │                                fixed replicas)
+                 ▼                                       ▼
+              DB / Redis                          Telegram Bot API
+```
+
+Highlights:
+
+* **`webhook-receiver`** is a thin FastAPI/aiohttp service. It validates
+  Telegram's `X-Telegram-Bot-Api-Secret-Token`, dedupes on `update_id`
+  (Redis `SETNX`) and publishes the raw update to RabbitMQ. No PTB, no
+  DB, no LLM. HPA scales it by RPS / CPU.
+* **Ordering per chat** is preserved via a RabbitMQ
+  [`x-consistent-hash`](https://github.com/rabbitmq/rabbitmq-consistent-hash-exchange)
+  exchange keyed on `chat_id`, fanning into N chat-shard queues. Each
+  shard queue has a single in-flight consumer, so messages from one chat
+  are serialized; different chats run in parallel across shards and worker
+  replicas.
+* **`worker-tasks`** runs the PTB handlers outside the webhook hot path.
+  The update is reconstructed from the JSON payload and fed through the
+  existing dispatcher — handler code stays unchanged.
+* **`worker-delivery`** stays as-is conceptually (generic `deliver` task +
+  facade), but the rate-limiter is hardened: global bucket + per-chat
+  bucket + 429 `retry_after` honoring + circuit-break to DLQ after N
+  retries.
+* **State moves off the bot process.** SQLite on an RWO PVC is fine for
+  v2's single replica but blocks multi-replica workers; v3 plans for a
+  Postgres backend (code path already exists via `src/databases/factory.py`,
+  just needs a `postgres/` sibling).
+* **k8s**: new overlay `k8s/overlays/scaled` with `webhook-receiver`
+  Deployment + Service + Ingress, HPAs (CPU and KEDA/RabbitMQ queue
+  depth), and the existing worker Deployments reused.
+
+Non-goals for v3:
+* Multi-bot / multi-tenancy — one bot token, one webhook.
+* Kafka or NATS — RabbitMQ's consistent-hash + Celery is enough at the
+  expected traffic and keeps the v2 stack.
+* Blue/green of the webhook URL — `setWebhook` is atomic and fast enough;
+  brief duplicate-during-switch is handled by `update_id` dedup.
 
 ---
 
