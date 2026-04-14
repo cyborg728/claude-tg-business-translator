@@ -12,7 +12,7 @@ matter of adding a sibling package under `src/databases/`.
 
 | Feature                                | How it's implemented                                              |
 | -------------------------------------- | ----------------------------------------------------------------- |
-| Commands `/start`, `/test_queue`       | `src/bot/handlers/`, dispatched non-blocking                      |
+| Commands `/start`, `/smoke`            | `src/bot/handlers/`, dispatched non-blocking                      |
 | Commands `/redis_save`, `/redis_read`  | Ephemeral text stash via async Redis                              |
 | Polling ⇄ Webhook switch               | `MODE=polling|webhook` in `.env` / ConfigMap                      |
 | Multi-language                         | `fluent.runtime`, auto-picks the user's Telegram `language_code`  |
@@ -58,7 +58,7 @@ matter of adding a sibling package under `src/databases/`.
     │   ├── deps.py               # BotDeps dataclass passed into handlers
     │   └── handlers/
     │       ├── commands.py       # /start + unknown
-    │       ├── queue_cmd.py      # /test_queue
+    │       ├── smoke.py         # /smoke (end-to-end pipeline sanity check)
     │       ├── redis_cmd.py      # /redis_save, /redis_read
     │       ├── business.py       # business_connection + business_message
     │       └── errors.py         # global error handler
@@ -112,7 +112,7 @@ Try the commands in your Telegram client:
 | Command         | Effect                                                            |
 | --------------- | ----------------------------------------------------------------- |
 | `/start`        | Stores / refreshes your user row and sends a localized greeting   |
-| `/test_queue`   | Replies "queued", Celery worker sleeps 5s, delivery worker sends `success` |
+| `/smoke`        | Replies "queued", Celery worker sleeps 5s, delivery worker sends `success` |
 | `/redis_save`   | Puts you in "save mode" — next text message is stored in Redis    |
 | `/redis_read`   | Reads back the text you last saved                                |
 
@@ -377,8 +377,8 @@ The runner uses `pyproject.toml [tool.pytest.ini_options]`:
 
 ### What's NOT tested yet (lands with the first real feature)
 
-* PTB handlers (`/start`, `/test_queue`, `/redis_*`, business, errors)
-* Celery `processing.test_queue` (the blocking sleep + chain-to-delivery)
+* PTB handlers (`/start`, `/smoke`, `/redis_*`, business, errors)
+* Celery `processing.smoke` (the blocking sleep + chain-to-delivery)
 * End-to-end smoke (Docker Compose / kubectl kustomize)
 
 ---

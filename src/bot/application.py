@@ -24,8 +24,8 @@ from .deps import BotDeps
 from .handlers import (
     BusinessHandlers,
     CommandHandlers,
-    QueueHandlers,
     RedisHandlers,
+    SmokeHandlers,
     error_handler,
 )
 
@@ -39,7 +39,7 @@ logger = logging.getLogger(__name__)
 def build_application(deps: BotDeps) -> Application:
     """Create a fully-configured PTB Application."""
     commands = CommandHandlers(deps)
-    queue = QueueHandlers(deps)
+    smoke = SmokeHandlers(deps)
     redis_h = RedisHandlers(deps)
     business = BusinessHandlers(deps)
 
@@ -55,7 +55,7 @@ def build_application(deps: BotDeps) -> Application:
 
     # ── Commands ──────────────────────────────────────────────────────────────
     app.add_handler(CommandHandler("start", commands.start, block=False))
-    app.add_handler(CommandHandler("test_queue", queue.test_queue, block=False))
+    app.add_handler(CommandHandler("smoke", smoke.smoke, block=False))
     app.add_handler(CommandHandler("redis_save", redis_h.redis_save, block=False))
     app.add_handler(CommandHandler("redis_read", redis_h.redis_read, block=False))
 

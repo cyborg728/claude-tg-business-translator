@@ -40,8 +40,8 @@ def test_gettext_substitutes_arguments(translator: Translator):
 
 
 def test_gettext_returns_localized_strings(translator: Translator):
-    en = translator.gettext("queue-success", locale="en")
-    ru = translator.gettext("queue-success", locale="ru")
+    en = translator.gettext("smoke-success", locale="en")
+    ru = translator.gettext("smoke-success", locale="ru")
     assert en and ru
     # 'success' keyword is identical between locales for this key, so just
     # check both are non-empty rather than insisting on inequality.
@@ -52,8 +52,8 @@ def test_gettext_unknown_message_returns_message_id(translator: Translator):
 
 
 def test_gettext_unknown_locale_uses_default(translator: Translator):
-    out = translator.gettext("queue-enqueued", locale="zh")
-    assert out == translator.gettext("queue-enqueued", locale="en")
+    out = translator.gettext("smoke-enqueued", locale="zh")
+    assert out == translator.gettext("smoke-enqueued", locale="en")
 
 
 def test_default_locale_invalid_falls_back_to_first_available():

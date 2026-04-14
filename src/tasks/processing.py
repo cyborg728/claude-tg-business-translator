@@ -1,6 +1,6 @@
 """Heavy-work tasks (consumed by the *tasks_queue* worker).
 
-The producer is the bot (e.g. ``/test_queue`` handler). The worker executes
+The producer is the bot (e.g. ``/smoke`` handler). The worker executes
 the slow work, then enqueues the result to the delivery queue.
 """
 
@@ -16,7 +16,7 @@ logger = logging.getLogger(__name__)
 
 
 @celery_app.task(
-    name="src.tasks.processing.test_queue",
+    name="src.tasks.processing.smoke",
     bind=True,
     autoretry_for=(Exception,),
     retry_backoff=True,
@@ -24,16 +24,21 @@ logger = logging.getLogger(__name__)
     retry_jitter=True,
     max_retries=3,
 )
-def test_queue(self, chat_id: int, locale: str, delay_s: int = 5) -> None:
-    """Simulate a slow job, then hand off the success message to delivery."""
+def smoke(self, chat_id: int, locale: str, delay_s: int = 5) -> None:
+    """Smoke-test the full pipeline: slow job → delivery queue → Telegram.
+
+    Kept around as a sanity check for the end-to-end wiring of both
+    workers. It gets deleted (or repurposed) as soon as the first real
+    feature lands.
+    """
     from src.i18n import get_translator
 
     logger.info(
-        "[processing.test_queue] chat_id=%s locale=%s delay=%ss", chat_id, locale, delay_s
+        "[processing.smoke] chat_id=%s locale=%s delay=%ss", chat_id, locale, delay_s
     )
     # Blocking sleep is fine: Celery workers are sync by default, and each
     # worker process occupies a single concurrency slot while it sleeps.
     time.sleep(delay_s)
 
-    text = get_translator().gettext("queue-success", locale=locale)
+    text = get_translator().gettext("smoke-success", locale=locale)
     send_text(chat_id, text)

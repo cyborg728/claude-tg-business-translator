@@ -6,14 +6,14 @@ start-greeting = 👋 Hi, { $name }! I'm ready to work.
 start-help =
     Available commands:
     /start        — this message
-    /test_queue   — enqueue a slow job and reply when it's done
+    /smoke        — end-to-end pipeline smoke test (enqueue → worker → reply)
     /redis_save   — save the next message text to Redis
     /redis_read   — read your saved text back from Redis
 
-# ── /test_queue ───────────────────────────────────────────────────────────────
-queue-enqueued = ✅ Your request is queued. I'll reply as soon as the worker is done.
-queue-success = 🎉 success
-queue-failure = ❌ Something went wrong while processing your request.
+# ── /smoke ────────────────────────────────────────────────────────────────────
+smoke-enqueued = ✅ Your request is queued. I'll reply as soon as the worker is done.
+smoke-success = 🎉 success
+smoke-failure = ❌ Something went wrong while processing your request.
 
 # ── /redis_save & /redis_read ─────────────────────────────────────────────────
 redis-save-prompt = 📝 Send the next message — I'll save it for you in Redis.
