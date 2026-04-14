@@ -170,7 +170,8 @@ the backend swap and the data copy are independently reversible.
 #### 4.1 Postgres backend code
 
 * New package `src/databases/postgres/`, mirroring `src/databases/sqlite/`:
-  * `db.py` — async engine/session factory via
+  * `database.py` (same name as in `src/databases/sqlite/`) — async
+    engine/session factory via
     `sqlalchemy.ext.asyncio` + `asyncpg`; sync engine via `psycopg` for
     Alembic.
   * `models.py` — same tables, Postgres-native types:
