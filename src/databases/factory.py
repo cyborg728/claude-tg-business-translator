@@ -13,6 +13,11 @@ def create_database(settings: Settings) -> AbstractDatabase:
 
         return SqliteDatabase(settings.database_url)
 
+    if settings.database_backend == "postgres":
+        from .postgres import PostgresDatabase
+
+        return PostgresDatabase(settings.database_url)
+
     raise RuntimeError(
         f"Unsupported DATABASE_BACKEND={settings.database_backend!r}. "
         "Implement a new subpackage under src/databases/ and register it here."

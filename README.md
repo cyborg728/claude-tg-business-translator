@@ -413,8 +413,9 @@ the repo root. The most important knobs:
 | `WEBHOOK_PORT`              | `8080`                                | Port the bot binds to                           |
 | `WEBHOOK_SECRET_TOKEN`      | —                                     | Secret header Telegram sends with each webhook  |
 | `DEFAULT_LOCALE`            | `en`                                  | Fallback when user's `language_code` is unknown |
-| `DATABASE_BACKEND`          | `sqlite`                              | Which backend package to load                   |
-| `DATABASE_PATH`             | `data/bot.db`                         | SQLite file                                     |
+| `DATABASE_BACKEND`          | `sqlite`                              | `sqlite` (default, local dev) or `postgres` (v3 Phase 4) |
+| `DATABASE_PATH`             | `data/bot.db`                         | SQLite file (`DATABASE_BACKEND=sqlite` only)    |
+| `POSTGRES_DSN`              | `postgresql://bot:bot@localhost:5432/bot` | Postgres URL used when `DATABASE_BACKEND=postgres`. `postgres://` and `postgresql://` both accepted |
 | `RABBITMQ_URL`              | `amqp://guest:guest@localhost:5672//` | Celery broker                                   |
 | `QUEUE_TASKS`               | `tasks_queue`                         | Processing queue name                           |
 | `QUEUE_DELIVERY`            | `delivery_queue`                      | Rate-limited sending queue                      |

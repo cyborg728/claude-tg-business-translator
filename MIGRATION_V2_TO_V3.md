@@ -250,6 +250,41 @@ the backend swap and the data copy are independently reversible.
   `requirements.txt`; `testcontainers[postgres]` to
   `requirements-dev.txt`.
 
+**Shipped (4.1):**
+
+* `src/databases/postgres/` — mirror of `src/databases/sqlite/` (same
+  module layout, same DTOs):
+  * `models/base.py` — `UuidV7PrimaryKeyMixin` uses
+    `sqlalchemy.dialects.postgresql.UUID(as_uuid=False)` so the `str`
+    DTO shape is dialect-agnostic; `CreatedAtMixin` / `TimestampMixin`
+    emit `TIMESTAMPTZ` via `DateTime(timezone=True)`.
+  * `models/{user,business_connection,message_mapping,kv_store}.py` —
+    native `BOOLEAN`; `kv_store` gains a
+    `uq_kv_store_owner_key` unique constraint that the upsert path
+    relies on.
+  * `repositories/` — single-round-trip upserts via
+    `sqlalchemy.dialects.postgresql.insert(...).on_conflict_do_update(constraint=...)`
+    + `RETURNING`; read paths unchanged.
+  * `database.py` — `create_async_engine` with pooling
+    (`pool_size=5`, `max_overflow=10`, `pool_pre_ping=True`); no
+    SQLite-only `check_same_thread`.
+* `src/databases/factory.py` — `DATABASE_BACKEND=postgres` → returns
+  `PostgresDatabase(settings.database_url)`. SQLite stays the default.
+* `src/config/settings.py` — `database_backend: Literal["sqlite", "postgres"]`;
+  new `POSTGRES_DSN`; `_rewrite_postgres_driver` normalises
+  `postgres://` / `postgresql://` / `postgresql+<driver>://` and swaps
+  the driver to `asyncpg` (async path) or `psycopg` (Alembic sync path).
+  `DATABASE_URL` / `DATABASE_URL_SYNC` are derived from those.
+* `requirements.txt` — `asyncpg>=0.30.0`, `psycopg[binary]>=3.2.0`.
+* Tests: 21 new (167 total) — DSN rewriter edge cases
+  (bare `postgres://`, existing driver suffix, query strings, rejected
+  schemes), settings wiring (async→asyncpg, sync→psycopg, sqlite
+  unchanged), CREATE TABLE DDL asserts native `UUID` / `TIMESTAMPTZ` /
+  `BOOLEAN` types, factory dispatch (sqlite/postgres without
+  connecting, unknown backend rejected by pydantic `Literal`).
+* Still remaining for 4.2+: Alembic `0002_postgres_parity.py`, data
+  migration script, k8s overlay, docs cutover runbook.
+
 #### 4.2 Alembic: dual-dialect migrations
 
 The existing `alembic/versions/0001_initial_schema.py` was written for
@@ -486,7 +521,7 @@ before shard count is.
 - [x] Phase 2: `webhook-receiver` + `MODE=receiver` + `scaled` overlay + tests
 - [x] Phase 3: consistent-hash exchange + `handle_update` task +
       StatefulSet-per-shard + ordering tests
-- [ ] Phase 4.1: `src/databases/postgres/` backend + factory registration + deps
+- [x] Phase 4.1: `src/databases/postgres/` backend + factory registration + deps
 - [ ] Phase 4.2: dual-dialect Alembic migration + CI job against both dialects
 - [ ] Phase 4.3: `scripts/migrate_sqlite_to_postgres.py` + integration tests (fixture copy, idempotency, refusals)
 - [ ] Phase 4.4: reverse script + documented rollback runbook

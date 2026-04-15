@@ -13,6 +13,26 @@ from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
+def _rewrite_postgres_driver(dsn: str, driver: str) -> str:
+    """Return *dsn* with its SQLAlchemy driver rewritten to ``postgresql+<driver>``.
+
+    Accepts any of ``postgres://``, ``postgresql://`` or
+    ``postgresql+<anything>://`` and normalises it so callers always get the
+    exact driver they asked for. The DSN body (credentials, host, database,
+    query string) is preserved verbatim.
+    """
+    prefix, sep, rest = dsn.partition("://")
+    if not sep:
+        raise ValueError(f"POSTGRES_DSN is not a URL: {dsn!r}")
+    # Strip any existing "+driver" suffix; normalise "postgres" → "postgresql".
+    scheme = prefix.split("+", 1)[0]
+    if scheme not in ("postgres", "postgresql"):
+        raise ValueError(
+            f"POSTGRES_DSN must start with postgres:// or postgresql://, got {prefix!r}"
+        )
+    return f"postgresql+{driver}://{rest}"
+
+
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
         env_file=".env",
@@ -38,8 +58,18 @@ class Settings(BaseSettings):
     default_locale: str = Field("en", description="ISO-639-1 fallback locale")
 
     # ── Database ──────────────────────────────────────────────────────────────
-    database_backend: Literal["sqlite"] = Field("sqlite", description="Database backend")
+    database_backend: Literal["sqlite", "postgres"] = Field(
+        "sqlite", description="Database backend: sqlite | postgres"
+    )
     database_path: str = Field("data/bot.db", description="SQLite file path")
+    postgres_dsn: str = Field(
+        "postgresql://bot:bot@localhost:5432/bot",
+        description=(
+            "Postgres DSN (driver-less). The async driver 'asyncpg' and the "
+            "sync driver 'psycopg' are selected automatically for "
+            "SQLAlchemy and Alembic respectively."
+        ),
+    )
 
     # ── RabbitMQ / Celery ─────────────────────────────────────────────────────
     rabbitmq_url: str = Field("amqp://guest:guest@localhost:5672//")
@@ -112,6 +142,8 @@ class Settings(BaseSettings):
     def database_url(self) -> str:
         if self.database_backend == "sqlite":
             return f"sqlite+aiosqlite:///{self.database_path}"
+        if self.database_backend == "postgres":
+            return _rewrite_postgres_driver(self.postgres_dsn, "asyncpg")
         raise RuntimeError(f"Unsupported DATABASE_BACKEND={self.database_backend}")
 
     @property
@@ -119,6 +151,8 @@ class Settings(BaseSettings):
         """Sync URL — used by Alembic migrations."""
         if self.database_backend == "sqlite":
             return f"sqlite:///{self.database_path}"
+        if self.database_backend == "postgres":
+            return _rewrite_postgres_driver(self.postgres_dsn, "psycopg")
         raise RuntimeError(f"Unsupported DATABASE_BACKEND={self.database_backend}")
 
     @property
