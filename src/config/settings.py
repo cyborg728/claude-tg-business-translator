@@ -50,22 +50,47 @@ class Settings(BaseSettings):
         description="Dead-letter queue for delivery tasks that exhausted retries",
     )
 
-    # ── Incoming-updates transport (Phase 2: webhook-receiver → RabbitMQ) ────
+    # ── Incoming-updates transport (webhook-receiver → RabbitMQ) ─────────────
+    # Phase 2 baseline: ``updates_exchange=""`` → default direct exchange →
+    # single ``updates_queue``.
+    # Phase 3 production: ``updates_exchange="updates"`` (type
+    # ``x-consistent-hash``) → N queues ``updates.shard.<i>``, each bound
+    # with weight ``1``. Routing key is ``str(chat_id)``.
     updates_exchange: str = Field(
         "",
         description=(
-            "RabbitMQ exchange the receiver publishes updates to. Default "
-            "(empty) means the built-in default direct exchange; Phase 3 "
-            "switches this to an 'x-consistent-hash' exchange."
+            "RabbitMQ exchange the receiver publishes updates to. Empty "
+            "means the built-in default direct exchange (Phase 2); set to "
+            "a non-empty name (e.g. 'updates') to switch to the Phase-3 "
+            "x-consistent-hash topology."
         ),
     )
     updates_queue: str = Field(
         "updates_queue",
         description=(
-            "Queue the receiver publishes to on Phase 2 (single-shard). "
-            "Phase 3 replaces this with N 'updates.shard.<i>' queues."
+            "Single-queue target for Phase 2. Ignored when UPDATES_EXCHANGE "
+            "is set — Phase 3 fans out to UPDATES_SHARDS shard queues."
         ),
     )
+    updates_shards: int = Field(
+        16,
+        ge=1,
+        le=256,
+        description=(
+            "Phase 3: number of shard queues bound to the consistent-hash "
+            "exchange. Shard queue names follow "
+            "'updates.shard.0' .. 'updates.shard.<N-1>'. Changing this at "
+            "runtime requires a coordinated re-declaration across the fleet."
+        ),
+    )
+
+    def shard_queue_name(self, index: int) -> str:
+        """Canonical name of the i-th update shard queue."""
+        if not 0 <= index < self.updates_shards:
+            raise ValueError(
+                f"shard index {index} out of range [0, {self.updates_shards})"
+            )
+        return f"updates.shard.{index}"
 
     # ── Redis ─────────────────────────────────────────────────────────────────
     redis_url: str = Field("redis://localhost:6379/0")

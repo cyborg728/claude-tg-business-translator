@@ -171,39 +171,52 @@ replaces the single `bot` Deployment. In the meantime, the `scaled`
 overlay is suitable for staging validation of the producer side — keep
 running the `webhook` overlay in production until Phase 3 lands.
 
-### Phase 3 — Consistent-hash sharding + handler worker
+### Phase 3 — Consistent-hash sharding + handler worker ✅ shipped
 
 Goal: run PTB handlers on N replicas without losing per-chat ordering.
 
-* Enable RabbitMQ `rabbitmq_consistent_hash_exchange` plugin (add to
-  `k8s/base/rabbitmq.yaml` `enabled_plugins`).
-* Declare exchange + shards in `src/tasks/celery_app.py`:
-  * `updates` exchange, type `x-consistent-hash`.
-  * N bindings to `updates.shard.0` … `updates.shard.{N-1}`, each
-    binding's routing key = weight (e.g. `"1"`).
-  * Shard count via config `UPDATES_SHARDS` (default 16).
-* New Celery task `handle_update(raw_update: dict)` in
-  `src/tasks/processing.py`:
-  * Rebuilds `telegram.Update.de_json(...)` using a shared `Bot`.
-  * Feeds it to a long-lived PTB `Application` built in worker
-    `worker_process_init` (one per worker process). Handlers run as
-    usual.
-  * Crucial: each shard queue must be consumed with
-    `prefetch_count=1` and Celery `worker_concurrency=1` **per shard**
-    (i.e. one worker pod per shard, or route shards by `-Q` to dedicated
-    processes). This is what preserves ordering.
-* Deployment topology:
-  * `worker-tasks` becomes a parameterized Deployment set, e.g. a
-    `StatefulSet` of N replicas each consuming exactly one shard
-    (`-Q updates.shard.$(POD_INDEX)`), or a Deployment per shard via
-    kustomize generator. StatefulSet is simpler.
-* Remove Celery producer code from `bot` process — it's dead code after
-  Phase 2.
-* Tests: consistent hashing reproducibility (same `chat_id` → same
-  shard); ordering property test (1000 updates one chat → in order at
-  consumer); handler wiring smoke test.
+**Shipped:**
 
-Deployable: handlers now scale horizontally; per-chat ordering preserved.
+* `k8s/base/rabbitmq.yaml` — enabled `rabbitmq_consistent_hash_exchange`
+  via a ConfigMap-backed `/etc/rabbitmq/enabled_plugins` mount.
+* `src/tasks/broker_topology.py` — idempotent helper that declares the
+  `updates` exchange (`x-consistent-hash`, durable) and N shard queues
+  `updates.shard.0`..`updates.shard.{N-1}`, each bound with weight `"1"`
+  (uniform distribution across the hash ring). Falls back to single-queue
+  Phase-2 mode when `UPDATES_EXCHANGE=""`.
+* `src/config/settings.py` — new `UPDATES_SHARDS` (default 16, bounded
+  `[1, 256]`) and `shard_queue_name(i)` helper.
+* `src/receiver/publisher.py` — uses the topology helper; publishes with
+  `routing_key=str(chat_id)` in Phase-3 mode and `"0"` for chat-less
+  updates. `chat_id` travels in headers for Phase-5 observability.
+* `src/tasks/update_consumer.py` — process-wide PTB `Application` built
+  once per worker fork in `worker_process_init`, driven by a dedicated
+  daemon-thread event loop so Celery's sync tasks can dispatch async
+  handlers via `run_coroutine_threadsafe`. Shared handler wiring with
+  `build_application()` — zero drift between polling / webhook /
+  receiver paths.
+* `src/tasks/processing.py` — new `handle_update(raw_update)` Celery
+  task (`acks_late=True`, autoretry × 3, jittered backoff) that forwards
+  to `dispatch_update`.
+* `src/tasks/celery_app.py` — dynamically declares shard queues from
+  `UPDATES_SHARDS`; `worker_process_init` hooks gated on `-Q
+  updates.shard.` in argv so delivery/tasks workers stay PTB-free.
+* k8s: `k8s/overlays/scaled/update-consumer.yaml` — StatefulSet (pod
+  ordinal → shard index), `--concurrency=1 --prefetch-multiplier=1` per
+  pod to preserve per-chat ordering. Overlay ConfigMap pins
+  `UPDATES_EXCHANGE=updates` and `UPDATES_SHARDS=4`.
+* Tests: 24 new (146 total) — settings bounds and `shard_queue_name`,
+  `declare_updates_topology` (Phase-2 fallback, Phase-3 shape, weight
+  uniformity, single-shard edge case), publisher routing (Phase-2 vs
+  Phase-3 exchange selection, `chat_id` → routing_key mapping,
+  chat-less → "0" fallback, headers, broker-failure propagation),
+  `dispatch_update` (uninitialised worker guard, PTB feed-through,
+  `de_json=None` swallow, exception propagation for DLQ), and
+  `handle_update` task body.
+
+Deployable: handlers now scale horizontally; per-chat ordering preserved
+by `x-consistent-hash` + single-consumer shards. Replaces the old
+single-replica `bot` Deployment once cutover is done.
 
 ### Phase 4 — SQLite → PostgreSQL migration
 
@@ -471,7 +484,7 @@ before shard count is.
 
 - [x] Phase 1: dedup + 429 + DLQ + metrics + tests
 - [x] Phase 2: `webhook-receiver` + `MODE=receiver` + `scaled` overlay + tests
-- [ ] Phase 3: consistent-hash exchange + `handle_update` task +
+- [x] Phase 3: consistent-hash exchange + `handle_update` task +
       StatefulSet-per-shard + ordering tests
 - [ ] Phase 4.1: `src/databases/postgres/` backend + factory registration + deps
 - [ ] Phase 4.2: dual-dialect Alembic migration + CI job against both dialects

@@ -28,6 +28,7 @@ async def run_receiver(settings: Settings | None = None) -> None:
         rabbitmq_url=settings.rabbitmq_url,
         exchange=settings.updates_exchange,
         queue=settings.updates_queue,
+        shard_count=settings.updates_shards,
     )
     await publisher.connect()
 

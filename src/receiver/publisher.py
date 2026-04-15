@@ -1,25 +1,26 @@
 """Async RabbitMQ publisher for incoming Telegram updates.
 
-Used exclusively by the :mod:`src.receiver` FastAPI app. The bot-side
-(PTB) path does not publish — it still processes updates in-process
-until Phase 3 flips everyone to queue-based dispatch.
+Used exclusively by the :mod:`src.receiver` FastAPI app.
 
-Phase 2 vs Phase 3 topology
----------------------------
-* **Phase 2 (now)** — single queue ``updates_queue``, published via the
-  built-in default direct exchange (``exchange=""``). One consumer
-  somewhere (old ``bot`` Deployment still handling updates directly, or
-  a stub worker) is enough to make this end-to-end once Phase 3 wires
-  consumption.
-* **Phase 3** — replace with an ``x-consistent-hash`` exchange and N
-  shard queues. This class will grow a ``chat_id`` routing-key branch;
-  callers already pass ``chat_id`` in so nothing changes at the call
-  site.
+Topology
+--------
+The publisher delegates topology declaration to
+:func:`src.tasks.broker_topology.declare_updates_topology`, so the
+receiver and the update-consumer agree on exchange/queue names.
 
-The publisher uses :func:`aio_pika.connect_robust` — the connection
-auto-reconnects on broker flaps and the channel is re-established
-transparently. Callers treat the publish as a simple awaitable; failure
-surfaces as :class:`PublisherError`.
+* **Phase 2** (``UPDATES_EXCHANGE=""``) — built-in default direct
+  exchange, single ``UPDATES_QUEUE``. ``chat_id`` travels in headers
+  only; the routing key is the queue name.
+* **Phase 3** (``UPDATES_EXCHANGE`` non-empty) — named
+  ``x-consistent-hash`` exchange, ``N = UPDATES_SHARDS`` bound shard
+  queues, routing key is ``str(chat_id)``. Updates without a chat fall
+  back to ``"0"`` so they still land somewhere deterministic.
+
+Robust connection
+-----------------
+``aio_pika.connect_robust`` auto-reconnects on broker flaps. Channels
+with ``publisher_confirms=True`` give us at-least-once semantics —
+:meth:`publish` returns only after the broker ACKs the message.
 """
 
 from __future__ import annotations
@@ -31,6 +32,8 @@ from typing import Any
 import aio_pika
 from aio_pika.abc import AbstractChannel, AbstractRobustConnection
 
+from src.tasks.broker_topology import UpdatesTopology, declare_updates_topology
+
 logger = logging.getLogger(__name__)
 
 
@@ -41,26 +44,37 @@ class PublisherError(RuntimeError):
 class UpdatePublisher:
     """Durable async publisher for Telegram update payloads."""
 
-    def __init__(self, rabbitmq_url: str, exchange: str, queue: str) -> None:
+    def __init__(
+        self,
+        rabbitmq_url: str,
+        *,
+        exchange: str,
+        queue: str,
+        shard_count: int = 1,
+    ) -> None:
         self._url = rabbitmq_url
         self._exchange_name = exchange
         self._queue_name = queue
+        self._shard_count = shard_count
         self._conn: AbstractRobustConnection | None = None
         self._channel: AbstractChannel | None = None
+        self._topology: UpdatesTopology | None = None
 
     # ── lifecycle ──────────────────────────────────────────────────────────
 
     async def connect(self) -> None:
-        """Open a robust connection and declare the target queue."""
+        """Open a robust connection and declare the publish topology."""
         self._conn = await aio_pika.connect_robust(self._url)
         self._channel = await self._conn.channel(publisher_confirms=True)
-        # Declare the queue so the first publish can't land in a void.
-        # ``durable=True`` ensures messages survive broker restarts.
-        await self._channel.declare_queue(self._queue_name, durable=True)
+        self._topology = await declare_updates_topology(
+            self._channel,
+            exchange_name=self._exchange_name,
+            shard_count=self._shard_count,
+            fallback_queue=self._queue_name,
+        )
         logger.info(
-            "UpdatePublisher ready (exchange=%r queue=%r)",
-            self._exchange_name,
-            self._queue_name,
+            "UpdatePublisher ready (mode=%s)",
+            "sharded" if self._topology.is_sharded else "single-queue",
         )
 
     async def close(self) -> None:
@@ -68,6 +82,7 @@ class UpdatePublisher:
             await self._conn.close()
         self._conn = None
         self._channel = None
+        self._topology = None
 
     def is_connected(self) -> bool:
         return self._conn is not None and not self._conn.is_closed
@@ -75,12 +90,9 @@ class UpdatePublisher:
     # ── publish ────────────────────────────────────────────────────────────
 
     async def publish(self, update: dict[str, Any], *, chat_id: int | None) -> None:
-        """Publish the raw update JSON. ``chat_id`` drives sharding in Phase 3.
-
-        Raises :class:`PublisherError` on any broker-side failure so the
-        caller (FastAPI handler) can translate it to HTTP 503.
-        """
-        if self._channel is None:
+        """Publish the raw update JSON. Raises :class:`PublisherError` on any
+        broker-side failure so the FastAPI handler can translate it to 503."""
+        if self._channel is None or self._topology is None:
             raise PublisherError("publisher not connected")
 
         body = json.dumps(update, ensure_ascii=False).encode("utf-8")
@@ -88,18 +100,23 @@ class UpdatePublisher:
             body=body,
             content_type="application/json",
             delivery_mode=aio_pika.DeliveryMode.PERSISTENT,
+            # chat_id in headers → Phase-3 consumers don't need to re-parse
+            # the body to know which chat this belongs to (handy for logs
+            # and metrics labels).
             headers={"chat_id": chat_id} if chat_id is not None else None,
         )
 
-        # Phase 2: use the default exchange, routing key = queue name.
-        # Phase 3: will switch to named x-consistent-hash exchange with
-        # ``routing_key=str(chat_id)`` — the call sites don't need to change.
-        exchange = (
-            await self._channel.get_exchange(self._exchange_name)
-            if self._exchange_name
-            else self._channel.default_exchange
-        )
-        routing_key = self._queue_name if not self._exchange_name else str(chat_id or 0)
+        if self._topology.is_sharded:
+            # Phase 3: named x-consistent-hash exchange. Routing key is the
+            # chat id as a string; chat-less updates use "0" so they still
+            # hit a shard (they'll pile on one shard but that's rare traffic).
+            exchange = self._topology.exchange
+            assert exchange is not None  # for type-checker; is_sharded guards
+            routing_key = str(chat_id) if chat_id is not None else "0"
+        else:
+            # Phase 2: default exchange, routing key == queue name.
+            exchange = self._channel.default_exchange
+            routing_key = self._queue_name
 
         try:
             await exchange.publish(message, routing_key=routing_key)

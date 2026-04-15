@@ -3,23 +3,33 @@ kind: Kustomization
 
 namespace: tg-bot
 
-# "Scaled" overlay — Phase 2 of v3 migration.
+# "Scaled" overlay — v3 Phases 2 + 3.
 #
 # Topology shipped in this overlay:
-#   Telegram → Ingress → webhook-receiver (N replicas, stateless FastAPI)
-#            → RabbitMQ (updates_queue, durable)
+#   Telegram ─HTTPS─▶ Ingress ─▶ webhook-receiver (N replicas, stateless)
+#                                       │ publish(update, key=chat_id)
+#                                       ▼
+#                               RabbitMQ x-consistent-hash exchange "updates"
+#                                       │
+#                               ┌───────┴───────┐
+#                               ▼               ▼
+#                      updates.shard.0 … updates.shard.{N-1}   (durable)
+#                               │               │
+#                               ▼               ▼
+#                          update-consumer-0 … update-consumer-{N-1}
+#                          (StatefulSet, one Celery worker per shard,
+#                           concurrency=1, prefetch=1 — preserves
+#                           per-chat ordering)
 #
-# Phase 2 intentionally ships the producer side only. The consumer side
-# (a sharded update-consumer Deployment that drives PTB) lands in Phase 3,
-# at which point the old bot Deployment from the ``webhook`` overlay is
-# retired. Until then, keep running the ``webhook`` overlay in production
-# and use ``scaled`` in staging to validate receiver → queue plumbing.
+# UPDATES_SHARDS in the ConfigMap MUST equal the StatefulSet replica
+# count (see update-consumer.yaml). Keep them in sync when scaling.
 resources:
   - ../../base
   - webhook-receiver.yaml
   - webhook-receiver-service.yaml
   - webhook-receiver-ingress.yaml
   - webhook-receiver-hpa.yaml
+  - update-consumer.yaml
 
 configMapGenerator:
   - name: tg-bot-config
@@ -27,7 +37,9 @@ configMapGenerator:
     literals:
       - MODE=receiver
       - WEBHOOK_BASE_URL=https://example.f8f.dev
-      - UPDATES_QUEUE=updates_queue
+      # Phase-3 routing: named x-consistent-hash exchange, N shards.
+      - UPDATES_EXCHANGE=updates
+      - UPDATES_SHARDS=4
 
 generatorOptions:
   disableNameSuffixHash: true

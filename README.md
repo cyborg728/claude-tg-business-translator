@@ -6,14 +6,17 @@ Alembic** and **Fluent** for i18n. Every piece is swappable — all repositories
 sit behind interfaces, so moving off SQLite (to Postgres, for example) is a
 matter of adding a sibling package under `src/databases/`.
 
-> **v3 status — Phase 2 shipped.** v3 inherits the v2 code and adds
+> **v3 status — Phase 3 shipped.** v3 inherits the v2 code and adds
 > horizontal scalability: the webhook receiver is split out from the PTB
 > handler process, updates are sharded by `chat_id` into RabbitMQ, and
 > delivery is token-bucketed against Telegram's global / per-chat rate
 > limits. **Phase 1** — `update_id` dedup, 429 `retry_after` handling,
-> `delivery_dlq`, Prometheus counters — is merged. **Phase 2** —
-> stateless `webhook-receiver` (FastAPI + aio-pika), `MODE=receiver`,
-> and the `scaled` k8s overlay with HPA — is merged. See
+> `delivery_dlq`, Prometheus counters. **Phase 2** — stateless
+> `webhook-receiver` (FastAPI + aio-pika), `MODE=receiver`, the
+> `scaled` overlay with HPA. **Phase 3** — `x-consistent-hash`
+> exchange + N shard queues, `handle_update` Celery task with a
+> long-lived per-worker PTB `Application`, `update-consumer`
+> StatefulSet that preserves per-chat ordering. See
 > [`MIGRATION_V2_TO_V3.md`](./MIGRATION_V2_TO_V3.md) for the
 > step-by-step plan and [🎯 v3 — horizontal scaling](#-v3--horizontal-scaling)
 > below for the target architecture.
@@ -95,6 +98,8 @@ Non-goals for v3:
 | Commands `/redis_save`, `/redis_read`  | Ephemeral text stash via async Redis                              |
 | Polling ⇄ Webhook ⇄ Receiver switch    | `MODE=polling|webhook|receiver` in `.env` / ConfigMap             |
 | **`webhook-receiver` (Phase 2)**       | FastAPI + aio-pika, `src/receiver/`, `scaled` overlay + HPA       |
+| **Consistent-hash shards (Phase 3)**   | `x-consistent-hash` exchange + N `updates.shard.<i>` queues       |
+| **`update-consumer` (Phase 3)**        | Per-shard StatefulSet, long-lived PTB app per worker process      |
 | Multi-language                         | `fluent.runtime`, auto-picks the user's Telegram `language_code`  |
 | **Update dedup (`update_id`)**         | Redis `SET NX EX` via `TypeHandler` in group `-1` (Phase 1)       |
 | Task queue (`tasks_queue`)             | Celery worker processes slow work                                 |
@@ -133,7 +138,7 @@ Non-goals for v3:
 │   └── overlays/
 │       ├── polling/              # MODE=polling — single-replica bot Deployment
 │       ├── webhook/              # MODE=webhook — bot Deployment + Service + Ingress
-│       └── scaled/               # MODE=receiver — stateless FastAPI + HPA (Phase 2)
+│       └── scaled/               # MODE=receiver + consistent-hash shards (Phase 2+3)
 └── src/
     ├── config/settings.py        # Pydantic Settings (single source of truth)
     ├── bot/
@@ -414,8 +419,9 @@ the repo root. The most important knobs:
 | `QUEUE_TASKS`               | `tasks_queue`                         | Processing queue name                           |
 | `QUEUE_DELIVERY`            | `delivery_queue`                      | Rate-limited sending queue                      |
 | `QUEUE_DELIVERY_DLQ`        | `delivery_dlq`                        | Dead-letter queue for terminal delivery failures|
-| `UPDATES_EXCHANGE`          | `""`                                  | Receiver publish exchange (Phase 3: x-consistent-hash) |
-| `UPDATES_QUEUE`             | `updates_queue`                       | Receiver publish queue (Phase 2 single shard)   |
+| `UPDATES_EXCHANGE`          | `""`                                  | Receiver publish exchange. `""` = Phase-2 default; `updates` = Phase-3 x-consistent-hash |
+| `UPDATES_QUEUE`             | `updates_queue`                       | Receiver publish queue (Phase 2 single shard, ignored when `UPDATES_EXCHANGE` is set) |
+| `UPDATES_SHARDS`            | `16`                                  | Phase-3 shard count (must equal `update-consumer` replicas) |
 | `DEDUP_TTL_SECONDS`         | `3600`                                | How long an `update_id` stays claimed in Redis  |
 | `REDIS_URL`                 | `redis://localhost:6379/0`            | Cache + Celery result backend                   |
 | `REDIS_SAVE_TTL`            | `3600`                                | `/redis_save` expiry (s). 0 = forever           |
