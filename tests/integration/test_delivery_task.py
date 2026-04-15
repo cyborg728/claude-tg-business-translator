@@ -12,7 +12,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 from celery.exceptions import Retry
 
-from src.tasks import delivery
+from src.tasks import delivery, metrics
 
 
 class _FakeResponse:
@@ -153,8 +153,143 @@ def test_deliver_raises_retry_on_429(fake_redis_sync):
     assert getattr(exc_info.value, "when", None) == 7
 
 
+def test_deliver_honors_top_level_retry_after(fake_redis_sync):
+    # Older Bot API responses put ``retry_after`` at the top level; newer
+    # ones nest it under ``parameters``. Either should work.
+    fake_http = _FakeHttpClient(_FakeResponse(429, {"ok": False, "retry_after": 3}))
+    with patch("httpx.Client", return_value=fake_http):
+        with pytest.raises(Retry) as exc_info:
+            _run_deliver(method="sendMessage", payload={"chat_id": 1, "text": "hi"})
+    assert getattr(exc_info.value, "when", None) == 3
+
+
+def test_deliver_picks_larger_retry_after_when_both_present(fake_redis_sync):
+    fake_http = _FakeHttpClient(
+        _FakeResponse(429, {"ok": False, "retry_after": 2, "parameters": {"retry_after": 9}})
+    )
+    with patch("httpx.Client", return_value=fake_http):
+        with pytest.raises(Retry) as exc_info:
+            _run_deliver(method="sendMessage", payload={"chat_id": 1, "text": "hi"})
+    assert getattr(exc_info.value, "when", None) == 9
+
+
 def test_deliver_raises_on_server_error(fake_redis_sync):
+    # 5xx raises a plain RuntimeError — Celery's ``autoretry_for`` catches
+    # it in worker context and reschedules. Under ``.run()`` we see the
+    # original RuntimeError (because autoretry's internal ``self.retry``
+    # detects ``called_directly=True`` and re-raises the exception).
     fake_http = _FakeHttpClient(_FakeResponse(500, text="boom"))
     with patch("httpx.Client", return_value=fake_http):
-        with pytest.raises(RuntimeError, match="HTTP 500"):
+        with pytest.raises(RuntimeError, match="Telegram 5xx"):
             _run_deliver(method="sendMessage", payload={"chat_id": 1, "text": "hi"})
+
+
+def test_deliver_raises_on_client_error(fake_redis_sync):
+    # 4xx (non-429) is not retryable — ``on_failure`` DLQs it.
+    fake_http = _FakeHttpClient(_FakeResponse(400, text="bad"))
+    with patch("httpx.Client", return_value=fake_http):
+        with pytest.raises(RuntimeError, match="HTTP 400"):
+            _run_deliver(method="sendMessage", payload={"chat_id": 1, "text": "hi"})
+
+
+# ── Metrics ──────────────────────────────────────────────────────────────────
+
+
+def _counter_value(counter, **labels):
+    return counter.labels(**labels)._value.get()
+
+
+def test_deliver_increments_sent_metric_on_success(fake_redis_sync):
+    before = _counter_value(metrics.deliver_sent_total, method="sendMessage")
+    fake_http = _FakeHttpClient(_FakeResponse(200, {"ok": True, "result": {}}))
+    with patch("httpx.Client", return_value=fake_http):
+        _run_deliver(method="sendMessage", payload={"chat_id": 1, "text": "hi"})
+    after = _counter_value(metrics.deliver_sent_total, method="sendMessage")
+    assert after == before + 1
+
+
+def test_deliver_increments_throttled_and_retry_metrics_on_429(fake_redis_sync):
+    before_429 = _counter_value(metrics.deliver_throttled_total, method="sendMessage")
+    before_retry = _counter_value(
+        metrics.deliver_retried_total, method="sendMessage", reason="throttled"
+    )
+    fake_http = _FakeHttpClient(_FakeResponse(429, {"retry_after": 1}))
+    with patch("httpx.Client", return_value=fake_http):
+        with pytest.raises(Retry):
+            _run_deliver(method="sendMessage", payload={"chat_id": 1, "text": "hi"})
+    assert (
+        _counter_value(metrics.deliver_throttled_total, method="sendMessage")
+        == before_429 + 1
+    )
+    assert (
+        _counter_value(metrics.deliver_retried_total, method="sendMessage", reason="throttled")
+        == before_retry + 1
+    )
+
+
+def test_deliver_increments_server_error_metric_on_5xx(fake_redis_sync):
+    before = _counter_value(metrics.deliver_server_error_total, method="sendMessage")
+    fake_http = _FakeHttpClient(_FakeResponse(500, text="boom"))
+    with patch("httpx.Client", return_value=fake_http):
+        with pytest.raises(RuntimeError):
+            _run_deliver(method="sendMessage", payload={"chat_id": 1, "text": "hi"})
+    assert (
+        _counter_value(metrics.deliver_server_error_total, method="sendMessage")
+        == before + 1
+    )
+
+
+# ── Dead-lettering ───────────────────────────────────────────────────────────
+
+
+def test_on_failure_publishes_to_dlq_and_increments_metric():
+    """Simulate Celery calling ``on_failure`` after retries exhausted."""
+    before = _counter_value(
+        metrics.deliver_dead_lettered_total, method="sendMessage", reason="RuntimeError"
+    )
+
+    captured = {}
+
+    def fake_publish(**kwargs):
+        captured.update(kwargs)
+
+    task = delivery.deliver
+    with patch.object(delivery, "_publish_dlq", side_effect=fake_publish):
+        task.on_failure(
+            exc=RuntimeError("5xx exhausted"),
+            task_id="abc-123",
+            args=(),
+            kwargs={"method": "sendMessage", "payload": {"chat_id": 42, "text": "x"}},
+            einfo=None,
+        )
+
+    assert captured["method"] == "sendMessage"
+    assert captured["payload"] == {"chat_id": 42, "text": "x"}
+    assert captured["reason"] == "RuntimeError"
+    assert captured["task_id"] == "abc-123"
+    after = _counter_value(
+        metrics.deliver_dead_lettered_total, method="sendMessage", reason="RuntimeError"
+    )
+    assert after == before + 1
+
+
+def test_on_failure_never_raises_when_dlq_publish_fails():
+    """A broken DLQ must not mask the original task failure."""
+    task = delivery.deliver
+    with patch.object(delivery, "_publish_dlq", side_effect=OSError("broker down")):
+        # Should complete without re-raising.
+        task.on_failure(
+            exc=RuntimeError("boom"),
+            task_id="t",
+            args=(),
+            kwargs={"method": "sendMessage", "payload": {"chat_id": 1}},
+            einfo=None,
+        )
+
+
+def test_retry_exception_bypasses_on_failure():
+    """``Retry`` is control-flow — it must never trigger DLQ publishing."""
+    # We don't need to invoke on_failure for Retry; Celery already skips it
+    # because ``Retry`` is listed in ``throws``. Here we just lock the
+    # invariant so no one removes ``throws = (Retry,)`` without thinking.
+    assert Retry in delivery._DeliveryTask.throws

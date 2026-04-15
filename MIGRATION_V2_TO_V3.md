@@ -85,18 +85,41 @@ State:
 Each phase ends with a green test suite and a deployable image. Later
 phases can be cherry-picked independently if priorities shift.
 
-### Phase 1 — Idempotency & rate-limit hardening (safety net)
+### Phase 1 — Idempotency & rate-limit hardening (safety net) ✅ shipped
 
 Goal: fix correctness before changing topology.
 
-* Add `update_id` dedup helper: `cache/idempotency.py` with `SETNX` + TTL.
-* Wire it into the existing PTB webhook handler (rejects duplicate
-  updates early).
+Delivered:
+* `src/cache/idempotency.py`: async `claim_update` via `SET NX EX`,
+  configurable TTL (`DEDUP_TTL_SECONDS`, default 3600s).
+* `src/bot/handlers/dedup.py` + `TypeHandler(Update, …)` registered in
+  group `-1` of `build_application` — duplicate `update_id` raises
+  `ApplicationHandlerStop` before any real handler runs.
 * `src/tasks/delivery.py`:
-  * Parse 429 response, honor `parameters.retry_after`.
-  * Add DLQ (`delivery_dlq`) for terminal failures after N retries.
-  * Expose Prometheus counters (sent, 429, 5xx, retried, dead-lettered).
-* Tests: dedup hit/miss, TTL; 429→retry with correct countdown; DLQ.
+  * 429 handling reads `retry_after` from both top-level and
+    `parameters.retry_after`; picks the larger.
+  * 5xx → plain `RuntimeError`, `autoretry_for=(Exception,)` does
+    exponential backoff with jitter.
+  * `_DeliveryTask` base with `on_failure` hook publishes a raw JSON
+    record (`method`, `payload`, `reason`, `task_id`, `traceback`, `ts`)
+    to `delivery_dlq` via the Celery producer pool (`throws=(Retry,)`
+    prevents Retry from triggering DLQ).
+  * `delivery_dlq` declared alongside the other queues in
+    `celery_app.conf.task_queues` (no consumer — ops drain manually).
+* `src/tasks/metrics.py`: counters
+  `deliver_sent_total{method}`, `deliver_throttled_total{method}`,
+  `deliver_server_error_total{method}`,
+  `deliver_retried_total{method,reason}`,
+  `deliver_dead_lettered_total{method,reason}`,
+  `dedup_hit_total`, `dedup_miss_total`.
+  In-process only — HTTP `/metrics` exposition deferred to Phase 5.
+* `prometheus-client>=0.21.0` added to `requirements.txt`.
+* Tests (`tests/integration/test_idempotency.py`,
+  `test_dedup_handler.py`, extended `test_delivery_task.py`):
+  dedup hit/miss/TTL/string-vs-int keys; `ApplicationHandlerStop` on
+  duplicate; 429 layouts; 5xx retry path; `on_failure` DLQ publish +
+  metric; DLQ failure doesn't mask the original exception. 98 tests
+  green, coverage 77.9%.
 
 Deployable: still single `bot` replica, but no duplicate work and no
 silent failures.
@@ -425,7 +448,7 @@ before shard count is.
 
 ## 7. Deliverables checklist
 
-- [ ] Phase 1: dedup + 429 + DLQ + metrics + tests
+- [x] Phase 1: dedup + 429 + DLQ + metrics + tests
 - [ ] Phase 2: `webhook-receiver` + `MODE=receiver` + `scaled` overlay + tests
 - [ ] Phase 3: consistent-hash exchange + `handle_update` task +
       StatefulSet-per-shard + ordering tests

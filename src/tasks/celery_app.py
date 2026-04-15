@@ -22,11 +22,15 @@ celery_app = Celery(
 # ── Routing ──────────────────────────────────────────────────────────────────
 # ``processing.*`` tasks go to the heavy-work queue.
 # ``delivery.*``   tasks go to the rate-limited Telegram-sending queue.
+# ``delivery_dlq`` is declared here so the broker has it on worker startup;
+# it has **no consumer** — terminal failures from ``deliver`` publish raw
+# records there for operators to inspect / replay manually.
 celery_app.conf.update(
     task_default_queue=_settings.queue_tasks,
     task_queues=(
         Queue(_settings.queue_tasks),
         Queue(_settings.queue_delivery),
+        Queue(_settings.queue_delivery_dlq),
     ),
     task_routes={
         "src.tasks.processing.*": {"queue": _settings.queue_tasks},

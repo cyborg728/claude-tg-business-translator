@@ -6,12 +6,14 @@ Alembic** and **Fluent** for i18n. Every piece is swappable — all repositories
 sit behind interfaces, so moving off SQLite (to Postgres, for example) is a
 matter of adding a sibling package under `src/databases/`.
 
-> **v3 status — in progress.** v3 inherits the v2 code as-is and adds
+> **v3 status — Phase 1 shipped.** v3 inherits the v2 code and adds
 > horizontal scalability: the webhook receiver is split out from the PTB
 > handler process, updates are sharded by `chat_id` into RabbitMQ, and
 > delivery is token-bucketed against Telegram's global / per-chat rate
-> limits. See [`MIGRATION_V2_TO_V3.md`](./MIGRATION_V2_TO_V3.md) for the
-> step-by-step plan and [🎯 v3 — horizontal scaling](#-v3--horizontal-scaling)
+> limits. **Phase 1 is merged** — `update_id` dedup, 429 `retry_after`
+> handling, `delivery_dlq` for terminal failures, and Prometheus
+> counters. See [`MIGRATION_V2_TO_V3.md`](./MIGRATION_V2_TO_V3.md) for
+> the step-by-step plan and [🎯 v3 — horizontal scaling](#-v3--horizontal-scaling)
 > below for the target architecture.
 
 ---
@@ -91,8 +93,11 @@ Non-goals for v3:
 | Commands `/redis_save`, `/redis_read`  | Ephemeral text stash via async Redis                              |
 | Polling ⇄ Webhook switch               | `MODE=polling|webhook` in `.env` / ConfigMap                      |
 | Multi-language                         | `fluent.runtime`, auto-picks the user's Telegram `language_code`  |
+| **Update dedup (`update_id`)**         | Redis `SET NX EX` via `TypeHandler` in group `-1` (Phase 1)       |
 | Task queue (`tasks_queue`)             | Celery worker processes slow work                                 |
 | Delivery queue (`delivery_queue`)      | Celery worker with per-sec / per-chat rate limits in Redis        |
+| **Delivery DLQ (`delivery_dlq`)**      | Terminal failures published raw via Kombu; no consumer (Phase 1)  |
+| **Prometheus counters**                | In-process via `prometheus-client`; HTTP exposition in Phase 5    |
 | Business accounts (`business_message`) | `BusinessConnectionHandler` + dedicated `MessageHandler` filter   |
 | Error handling                         | Global `error_handler` + catch-all `/unknown` handler             |
 | UUID v7 primary keys                   | `uuid_utils.uuid7` via `src/utils/ids.py`                         |
@@ -392,6 +397,8 @@ the repo root. The most important knobs:
 | `RABBITMQ_URL`              | `amqp://guest:guest@localhost:5672//` | Celery broker                                   |
 | `QUEUE_TASKS`               | `tasks_queue`                         | Processing queue name                           |
 | `QUEUE_DELIVERY`            | `delivery_queue`                      | Rate-limited sending queue                      |
+| `QUEUE_DELIVERY_DLQ`        | `delivery_dlq`                        | Dead-letter queue for terminal delivery failures|
+| `DEDUP_TTL_SECONDS`         | `3600`                                | How long an `update_id` stays claimed in Redis  |
 | `REDIS_URL`                 | `redis://localhost:6379/0`            | Cache + Celery result backend                   |
 | `REDIS_SAVE_TTL`            | `3600`                                | `/redis_save` expiry (s). 0 = forever           |
 | `DELIVERY_RATE_PER_SECOND`  | `25`                                  | Global send budget (Telegram: ~30/s)            |
@@ -448,7 +455,9 @@ The runner uses `pyproject.toml [tool.pytest.ini_options]`:
 | Redis cache                   | `tests/integration/test_redis_cache.py`                       | save/read, wait flag, TTL semantics (via fakeredis) |
 | Alembic migrations            | `tests/integration/test_alembic_migrations.py`                | upgrade head, downgrade base, idempotent re-run     |
 | Delivery facade               | `tests/unit/test_delivery_facade.py`                          | `send_text` / `send_photo` / `edit_text` payloads   |
-| Delivery task                 | `tests/integration/test_delivery_task.py`                     | routing, rate-limit acquisition, 429 → Retry, 5xx   |
+| Delivery task                 | `tests/integration/test_delivery_task.py`                     | routing, rate-limit, 429 → Retry, 5xx, DLQ, metrics |
+| Update dedup                  | `tests/integration/test_idempotency.py`                       | first-call wins, TTL, non-destructive `has_seen`    |
+| Dedup PTB wiring              | `tests/integration/test_dedup_handler.py`                     | `ApplicationHandlerStop` on duplicate `update_id`   |
 
 ### What's NOT tested yet (lands with the first real feature)
 

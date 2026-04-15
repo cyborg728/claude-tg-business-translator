@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import logging
 
+from telegram import Update
 from telegram.ext import (
     AIORateLimiter,
     Application,
@@ -17,6 +18,7 @@ from telegram.ext import (
     BusinessConnectionHandler,
     CommandHandler,
     MessageHandler,
+    TypeHandler,
     filters,
 )
 
@@ -26,6 +28,7 @@ from .handlers import (
     CommandHandlers,
     RedisHandlers,
     SmokeHandlers,
+    dedup_filter,
     error_handler,
 )
 
@@ -52,6 +55,11 @@ def build_application(deps: BotDeps) -> Application:
         .rate_limiter(AIORateLimiter())
         .build()
     )
+
+    # ── Dedup (runs first; drops retried update_ids) ──────────────────────────
+    # group=-1 runs strictly before every other handler group. ``block=True``
+    # ensures the Redis SETNX completes before any real handler dispatches.
+    app.add_handler(TypeHandler(Update, dedup_filter, block=True), group=-1)
 
     # ── Commands ──────────────────────────────────────────────────────────────
     app.add_handler(CommandHandler("start", commands.start, block=False))

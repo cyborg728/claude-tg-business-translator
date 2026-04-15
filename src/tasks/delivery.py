@@ -23,6 +23,15 @@ If a limit would be exceeded we ``time.sleep`` briefly and retry the check.
 Celery's ``task_reject_on_worker_lost + acks_late`` settings guarantee the
 message is re-delivered in case the worker dies mid-sleep.
 
+Dead-lettering
+--------------
+When a delivery task exhausts ``max_retries`` (5xx from Bot API, broker
+errors, etc.) Celery calls :meth:`_DeliveryTask.on_failure`, which
+publishes a **raw** record (method, payload, reason, traceback) onto the
+``delivery_dlq`` queue. There is no consumer — operators drain it
+manually (CLI / rabbitmqadmin). 429 responses are **not** dead-lettered;
+they're purely back-pressure and re-enqueue themselves via ``Retry``.
+
 Adding a new Bot API method
 ---------------------------
 You almost certainly don't need a new task — just call :func:`deliver`
@@ -37,10 +46,13 @@ import logging
 import time
 from typing import Any
 
+from celery import Task
 from celery.exceptions import Retry
+from kombu import Queue
 
 from src.config import get_settings
 
+from . import metrics
 from .celery_app import celery_app
 
 logger = logging.getLogger(__name__)
@@ -94,10 +106,89 @@ def _wait_for_slot(r, chat_id: int | None) -> None:
     raise Retry(when=1)
 
 
+def _retry_after_from_429(body: dict) -> int:
+    """Pick the ``retry_after`` from a 429 body, honoring both layouts.
+
+    Telegram historically puts the hint at the top level (``retry_after``)
+    and now also at ``parameters.retry_after``. Whichever is present (and
+    larger) wins; fall back to 1 second if neither is present.
+    """
+    top = body.get("retry_after")
+    nested = (body.get("parameters") or {}).get("retry_after")
+    candidates = [int(v) for v in (top, nested) if v is not None]
+    return max(candidates) if candidates else 1
+
+
+def _publish_dlq(
+    *,
+    method: str,
+    payload: dict[str, Any],
+    reason: str,
+    task_id: str | None,
+    traceback: str | None,
+) -> None:
+    """Publish a raw record to ``delivery_dlq`` — no task, no consumer."""
+    settings = get_settings()
+    record = {
+        "method": method,
+        "payload": payload,
+        "reason": reason,
+        "task_id": task_id,
+        "traceback": traceback,
+        "ts": int(time.time()),
+    }
+    # ``producer_pool.acquire`` reuses broker connections from the Celery
+    # app's pool; ``declare`` ensures the queue exists before publish
+    # (worker already declared it on startup via ``task_queues``, but this
+    # makes the helper safe to call from anywhere).
+    with celery_app.producer_pool.acquire(block=True) as producer:
+        producer.publish(
+            record,
+            serializer="json",
+            routing_key=settings.queue_delivery_dlq,
+            declare=[Queue(settings.queue_delivery_dlq)],
+        )
+
+
+# ── Task class: dead-letter on terminal failure ─────────────────────────────
+
+
+class _DeliveryTask(Task):
+    """Custom base so terminal failures land in the DLQ with a trace."""
+
+    # ``Retry`` is a control-flow exception — Celery uses it to reschedule.
+    # We never want the DLQ hook to fire on Retry.
+    throws = (Retry,)
+
+    def on_failure(self, exc, task_id, args, kwargs, einfo):  # type: ignore[override]
+        method = kwargs.get("method") or (args[0] if args else "?")
+        payload = kwargs.get("payload") or (args[1] if len(args) > 1 else {})
+        reason = type(exc).__name__
+        logger.error(
+            "DLQ: method=%s chat_id=%s reason=%s task_id=%s",
+            method,
+            payload.get("chat_id") if isinstance(payload, dict) else None,
+            reason,
+            task_id,
+        )
+        try:
+            _publish_dlq(
+                method=method,
+                payload=payload if isinstance(payload, dict) else {},
+                reason=reason,
+                task_id=task_id,
+                traceback=str(einfo) if einfo is not None else None,
+            )
+        except Exception:  # pragma: no cover — never mask the original failure
+            logger.exception("Failed to publish DLQ record for task %s", task_id)
+        metrics.deliver_dead_lettered_total.labels(method=method, reason=reason).inc()
+
+
 # ── Generic task ─────────────────────────────────────────────────────────────
 
 
 @celery_app.task(
+    base=_DeliveryTask,
     name="src.tasks.delivery.deliver",
     bind=True,
     autoretry_for=(Exception,),
@@ -135,9 +226,22 @@ def deliver(self, *, method: str, payload: dict[str, Any]) -> dict[str, Any] | N
         resp = http.post(url, json=payload)
 
     if resp.status_code == 429:
-        retry_after = int(resp.json().get("parameters", {}).get("retry_after", 1))
+        retry_after = _retry_after_from_429(resp.json() or {})
         logger.warning("Telegram 429 on %s — retry_after=%ss", method, retry_after)
+        metrics.deliver_throttled_total.labels(method=method).inc()
+        metrics.deliver_retried_total.labels(method=method, reason="throttled").inc()
         raise Retry(when=retry_after)
+    if 500 <= resp.status_code < 600:
+        logger.error(
+            "Telegram API 5xx on %s: %s %s", method, resp.status_code, resp.text
+        )
+        metrics.deliver_server_error_total.labels(method=method).inc()
+        metrics.deliver_retried_total.labels(method=method, reason="server_error").inc()
+        # Raise — ``autoretry_for=(Exception,)`` on this task catches it and
+        # re-raises as ``Retry`` with exponential backoff. On the final
+        # attempt ``MaxRetriesExceededError`` propagates up, triggering
+        # ``_DeliveryTask.on_failure`` → DLQ.
+        raise RuntimeError(f"Telegram 5xx on {method}: {resp.status_code}")
     if resp.status_code >= 400:
         logger.error(
             "Telegram API error on %s: %s %s", method, resp.status_code, resp.text
@@ -145,6 +249,7 @@ def deliver(self, *, method: str, payload: dict[str, Any]) -> dict[str, Any] | N
         resp.raise_for_status()
 
     data = resp.json()
+    metrics.deliver_sent_total.labels(method=method).inc()
     return data.get("result") if isinstance(data, dict) else None
 
 

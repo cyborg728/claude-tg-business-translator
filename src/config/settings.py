@@ -43,6 +43,10 @@ class Settings(BaseSettings):
     rabbitmq_url: str = Field("amqp://guest:guest@localhost:5672//")
     queue_tasks: str = Field("tasks_queue")
     queue_delivery: str = Field("delivery_queue")
+    queue_delivery_dlq: str = Field(
+        "delivery_dlq",
+        description="Dead-letter queue for delivery tasks that exhausted retries",
+    )
 
     # ── Redis ─────────────────────────────────────────────────────────────────
     redis_url: str = Field("redis://localhost:6379/0")
@@ -51,6 +55,13 @@ class Settings(BaseSettings):
     # ── Delivery rate-limit ───────────────────────────────────────────────────
     delivery_rate_per_second: int = Field(25, ge=1, description="Global messages per second")
     delivery_rate_per_chat: int = Field(1, ge=1, description="Per-chat messages per second")
+
+    # ── Idempotency ───────────────────────────────────────────────────────────
+    dedup_ttl_seconds: int = Field(
+        3600,
+        ge=1,
+        description="How long an update_id stays claimed in Redis (seconds)",
+    )
 
     # ── Derived ───────────────────────────────────────────────────────────────
     @property

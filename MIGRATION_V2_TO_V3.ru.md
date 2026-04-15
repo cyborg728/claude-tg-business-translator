@@ -90,21 +90,42 @@ Telegram ─HTTPS─▶ Ingress
 образом. Поздние фазы можно переставить местами, если приоритеты
 сдвинутся.
 
-### Фаза 1 — Идемпотентность и упрочнение rate-limit (safety net)
+### Фаза 1 — Идемпотентность и упрочнение rate-limit (safety net) ✅ выполнено
 
 Цель: починить корректность до смены топологии.
 
-* Добавить хелпер дедупа по `update_id`: `cache/idempotency.py` с
-  `SETNX` + TTL.
-* Подключить его в существующем PTB webhook-хэндлере (ранний отбой
-  дубликатов).
+Сделано:
+* `src/cache/idempotency.py`: async `claim_update` через `SET NX EX`, TTL
+  настраивается (`DEDUP_TTL_SECONDS`, по умолчанию 3600с).
+* `src/bot/handlers/dedup.py` + `TypeHandler(Update, …)` зарегистрирован
+  в группе `-1` в `build_application` — при дубликате `update_id`
+  поднимается `ApplicationHandlerStop` до того, как отработает любой
+  реальный хэндлер.
 * `src/tasks/delivery.py`:
-  * Парсить 429-ответ, учитывать `parameters.retry_after`.
-  * Добавить DLQ (`delivery_dlq`) для терминальных падений после N
-    ретраев.
-  * Экспортировать счётчики в Prometheus (sent, 429, 5xx, retried,
-    dead-lettered).
-* Тесты: dedup hit/miss, TTL; 429→retry с правильным countdown; DLQ.
+  * 429 — `retry_after` читается и на верхнем уровне, и в
+    `parameters.retry_after`; берётся больший.
+  * 5xx → обычный `RuntimeError`, `autoretry_for=(Exception,)`
+    обеспечивает экспоненциальный backoff с jitter.
+  * Базовый класс `_DeliveryTask` с хуком `on_failure` публикует сырой
+    JSON-record (`method`, `payload`, `reason`, `task_id`, `traceback`,
+    `ts`) в `delivery_dlq` через producer-pool Celery (`throws=(Retry,)`
+    защищает от срабатывания DLQ на Retry).
+  * `delivery_dlq` объявлена в `celery_app.conf.task_queues` рядом с
+    остальными — без консьюмера (ops дренируют вручную).
+* `src/tasks/metrics.py`: счётчики
+  `deliver_sent_total{method}`, `deliver_throttled_total{method}`,
+  `deliver_server_error_total{method}`,
+  `deliver_retried_total{method,reason}`,
+  `deliver_dead_lettered_total{method,reason}`,
+  `dedup_hit_total`, `dedup_miss_total`.
+  Пока только in-process — HTTP `/metrics` отложен до Фазы 5.
+* В `requirements.txt` добавлен `prometheus-client>=0.21.0`.
+* Тесты (`tests/integration/test_idempotency.py`,
+  `test_dedup_handler.py`, расширенный `test_delivery_task.py`):
+  dedup hit/miss/TTL/строковые-vs-int ключи; `ApplicationHandlerStop`
+  на дубликате; оба layout'а 429; путь retry для 5xx; публикация в DLQ
+  из `on_failure` + метрика; падение DLQ-паблиша не маскирует исходное
+  исключение. 98 тестов зелёные, покрытие 77.9%.
 
 Деплоится: всё ещё одна реплика `bot`, но без дублирующей работы и
 тихих падений.
@@ -449,7 +470,7 @@ business-соединений, ограниченные KV-записи). Пот
 
 ## 7. Чеклист деливераблов
 
-- [ ] Фаза 1: дедуп + 429 + DLQ + метрики + тесты
+- [x] Фаза 1: дедуп + 429 + DLQ + метрики + тесты
 - [ ] Фаза 2: `webhook-receiver` + `MODE=receiver` + overlay `scaled` + тесты
 - [ ] Фаза 3: consistent-hash exchange + таска `handle_update` +
       StatefulSet-на-шард + тесты порядка
