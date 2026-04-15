@@ -1,0 +1,33 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: tg-bot
+
+# "Scaled" overlay — Phase 2 of v3 migration.
+#
+# Topology shipped in this overlay:
+#   Telegram → Ingress → webhook-receiver (N replicas, stateless FastAPI)
+#            → RabbitMQ (updates_queue, durable)
+#
+# Phase 2 intentionally ships the producer side only. The consumer side
+# (a sharded update-consumer Deployment that drives PTB) lands in Phase 3,
+# at which point the old bot Deployment from the ``webhook`` overlay is
+# retired. Until then, keep running the ``webhook`` overlay in production
+# and use ``scaled`` in staging to validate receiver → queue plumbing.
+resources:
+  - ../../base
+  - webhook-receiver.yaml
+  - webhook-receiver-service.yaml
+  - webhook-receiver-ingress.yaml
+  - webhook-receiver-hpa.yaml
+
+configMapGenerator:
+  - name: tg-bot-config
+    behavior: merge
+    literals:
+      - MODE=receiver
+      - WEBHOOK_BASE_URL=https://example.f8f.dev
+      - UPDATES_QUEUE=updates_queue
+
+generatorOptions:
+  disableNameSuffixHash: true

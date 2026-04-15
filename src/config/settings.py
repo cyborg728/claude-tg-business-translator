@@ -25,7 +25,9 @@ class Settings(BaseSettings):
     telegram_bot_token: str = Field(..., description="Bot token from @BotFather")
 
     # ── Bot mode ──────────────────────────────────────────────────────────────
-    mode: Literal["polling", "webhook"] = Field("polling", description="polling|webhook")
+    mode: Literal["polling", "webhook", "receiver"] = Field(
+        "polling", description="polling|webhook|receiver"
+    )
 
     # Webhook (required when mode=webhook)
     webhook_base_url: str = Field("https://example.f8f.dev", description="Public base URL")
@@ -46,6 +48,23 @@ class Settings(BaseSettings):
     queue_delivery_dlq: str = Field(
         "delivery_dlq",
         description="Dead-letter queue for delivery tasks that exhausted retries",
+    )
+
+    # ── Incoming-updates transport (Phase 2: webhook-receiver → RabbitMQ) ────
+    updates_exchange: str = Field(
+        "",
+        description=(
+            "RabbitMQ exchange the receiver publishes updates to. Default "
+            "(empty) means the built-in default direct exchange; Phase 3 "
+            "switches this to an 'x-consistent-hash' exchange."
+        ),
+    )
+    updates_queue: str = Field(
+        "updates_queue",
+        description=(
+            "Queue the receiver publishes to on Phase 2 (single-shard). "
+            "Phase 3 replaces this with N 'updates.shard.<i>' queues."
+        ),
     )
 
     # ── Redis ─────────────────────────────────────────────────────────────────
@@ -106,8 +125,8 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def _require_webhook_url_in_webhook_mode(self) -> "Settings":
-        if self.mode == "webhook" and not self.webhook_base_url:
-            raise ValueError("WEBHOOK_BASE_URL must be set when MODE=webhook")
+        if self.mode in ("webhook", "receiver") and not self.webhook_base_url:
+            raise ValueError("WEBHOOK_BASE_URL must be set when MODE=webhook|receiver")
         return self
 
 

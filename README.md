@@ -6,14 +6,16 @@ Alembic** and **Fluent** for i18n. Every piece is swappable — all repositories
 sit behind interfaces, so moving off SQLite (to Postgres, for example) is a
 matter of adding a sibling package under `src/databases/`.
 
-> **v3 status — Phase 1 shipped.** v3 inherits the v2 code and adds
+> **v3 status — Phase 2 shipped.** v3 inherits the v2 code and adds
 > horizontal scalability: the webhook receiver is split out from the PTB
 > handler process, updates are sharded by `chat_id` into RabbitMQ, and
 > delivery is token-bucketed against Telegram's global / per-chat rate
-> limits. **Phase 1 is merged** — `update_id` dedup, 429 `retry_after`
-> handling, `delivery_dlq` for terminal failures, and Prometheus
-> counters. See [`MIGRATION_V2_TO_V3.md`](./MIGRATION_V2_TO_V3.md) for
-> the step-by-step plan and [🎯 v3 — horizontal scaling](#-v3--horizontal-scaling)
+> limits. **Phase 1** — `update_id` dedup, 429 `retry_after` handling,
+> `delivery_dlq`, Prometheus counters — is merged. **Phase 2** —
+> stateless `webhook-receiver` (FastAPI + aio-pika), `MODE=receiver`,
+> and the `scaled` k8s overlay with HPA — is merged. See
+> [`MIGRATION_V2_TO_V3.md`](./MIGRATION_V2_TO_V3.md) for the
+> step-by-step plan and [🎯 v3 — horizontal scaling](#-v3--horizontal-scaling)
 > below for the target architecture.
 
 ---
@@ -91,7 +93,8 @@ Non-goals for v3:
 | -------------------------------------- | ----------------------------------------------------------------- |
 | Commands `/start`, `/smoke`            | `src/bot/handlers/`, dispatched non-blocking                      |
 | Commands `/redis_save`, `/redis_read`  | Ephemeral text stash via async Redis                              |
-| Polling ⇄ Webhook switch               | `MODE=polling|webhook` in `.env` / ConfigMap                      |
+| Polling ⇄ Webhook ⇄ Receiver switch    | `MODE=polling|webhook|receiver` in `.env` / ConfigMap             |
+| **`webhook-receiver` (Phase 2)**       | FastAPI + aio-pika, `src/receiver/`, `scaled` overlay + HPA       |
 | Multi-language                         | `fluent.runtime`, auto-picks the user's Telegram `language_code`  |
 | **Update dedup (`update_id`)**         | Redis `SET NX EX` via `TypeHandler` in group `-1` (Phase 1)       |
 | Task queue (`tasks_queue`)             | Celery worker processes slow work                                 |
@@ -129,7 +132,8 @@ Non-goals for v3:
 │   │                             # worker deployments, migrate Job, backup CronJobs
 │   └── overlays/
 │       ├── polling/              # MODE=polling — single-replica bot Deployment
-│       └── webhook/              # MODE=webhook — bot Deployment + Service + Ingress
+│       ├── webhook/              # MODE=webhook — bot Deployment + Service + Ingress
+│       └── scaled/               # MODE=receiver — stateless FastAPI + HPA (Phase 2)
 └── src/
     ├── config/settings.py        # Pydantic Settings (single source of truth)
     ├── bot/
@@ -298,7 +302,7 @@ Why this shape:
 
 ---
 
-## 🎛 Polling vs Webhook
+## 🎛 Polling vs Webhook vs Receiver
 
 Switch via `MODE`:
 
@@ -306,15 +310,25 @@ Switch via `MODE`:
 # development
 MODE=polling python main.py
 
-# production
+# production — bot owns the webhook (v2 topology)
 MODE=webhook \
 WEBHOOK_BASE_URL=https://example.f8f.dev \
 WEBHOOK_SECRET_TOKEN=... \
 python main.py
+
+# v3 Phase 2 — stateless receiver in front of RabbitMQ
+MODE=receiver \
+WEBHOOK_BASE_URL=https://example.f8f.dev \
+WEBHOOK_SECRET_TOKEN=... \
+RABBITMQ_URL=amqp://guest:guest@localhost:5672// \
+UPDATES_QUEUE=updates_queue \
+python main.py
 ```
 
-The runner picks the right code path in `src/bot/runner.py` — nothing else
-changes.
+`polling` and `webhook` boot PTB via `src/bot/runner.py`; `receiver`
+boots the FastAPI app in `src/receiver/runner.py` — no PTB, no DB, no
+LLM. Only one endpoint per bot token is ever registered with Telegram,
+so `webhook` and `receiver` are mutually exclusive in production.
 
 ---
 
@@ -332,7 +346,9 @@ $EDITOR k8s/base/secret.yaml
 # 3. Pick a mode and apply via kustomize.
 kubectl apply -k k8s/overlays/polling     # polling
 #  — or —
-kubectl apply -k k8s/overlays/webhook     # webhook
+kubectl apply -k k8s/overlays/webhook     # webhook (bot owns the URL)
+#  — or (v3 Phase 2) —
+kubectl apply -k k8s/overlays/scaled      # stateless receiver + HPA
 
 # 4. Run migrations (idempotent).
 kubectl -n tg-bot delete job tg-bot-migrate --ignore-not-found
@@ -387,7 +403,7 @@ the repo root. The most important knobs:
 | Variable                    | Default                               | Meaning                                         |
 | --------------------------- | ------------------------------------- | ----------------------------------------------- |
 | `TELEGRAM_BOT_TOKEN`        | —                                     | Bot token from @BotFather                       |
-| `MODE`                      | `polling`                             | `polling` or `webhook`                          |
+| `MODE`                      | `polling`                             | `polling`, `webhook`, or `receiver` (v3 Phase 2)|
 | `WEBHOOK_BASE_URL`          | `https://example.f8f.dev`             | Public HTTPS URL (no trailing slash)            |
 | `WEBHOOK_PORT`              | `8080`                                | Port the bot binds to                           |
 | `WEBHOOK_SECRET_TOKEN`      | —                                     | Secret header Telegram sends with each webhook  |
@@ -398,6 +414,8 @@ the repo root. The most important knobs:
 | `QUEUE_TASKS`               | `tasks_queue`                         | Processing queue name                           |
 | `QUEUE_DELIVERY`            | `delivery_queue`                      | Rate-limited sending queue                      |
 | `QUEUE_DELIVERY_DLQ`        | `delivery_dlq`                        | Dead-letter queue for terminal delivery failures|
+| `UPDATES_EXCHANGE`          | `""`                                  | Receiver publish exchange (Phase 3: x-consistent-hash) |
+| `UPDATES_QUEUE`             | `updates_queue`                       | Receiver publish queue (Phase 2 single shard)   |
 | `DEDUP_TTL_SECONDS`         | `3600`                                | How long an `update_id` stays claimed in Redis  |
 | `REDIS_URL`                 | `redis://localhost:6379/0`            | Cache + Celery result backend                   |
 | `REDIS_SAVE_TTL`            | `3600`                                | `/redis_save` expiry (s). 0 = forever           |

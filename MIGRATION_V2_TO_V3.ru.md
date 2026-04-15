@@ -130,35 +130,55 @@ Telegram ─HTTPS─▶ Ingress
 Деплоится: всё ещё одна реплика `bot`, но без дублирующей работы и
 тихих падений.
 
-### Фаза 2 — Вынести `webhook-receiver`
+### Фаза 2 — Вынести `webhook-receiver` ✅ выполнено
 
 Цель: отделить приём от хэндлеров. Флот воркеров пока один, но
 hot-path становится тривиальным.
 
-* Новый пакет `src/receiver/`:
-  * `app.py` — FastAPI (или aiohttp) приложение с одним роутом:
-    `POST /webhook/{secret_path}`.
-  * Валидирует `X-Telegram-Bot-Api-Secret-Token`.
-  * Использует дедуп-хелпер из Фазы 1.
-  * Публикует сырой JSON в exchange `updates` с
-    `routing_key=str(chat_id)`.
-  * `/healthz` + `/readyz`.
-* `main.py`: добавить ветку `MODE=receiver` (polling / webhook /
-  receiver). Остаётся один образ — k8s Deployment просто
-  переопределяет команду.
-* `src/tasks/receiver_publish.py`: тонкая обёртка над aio-pika /
-  kombu producer. Переиспользуется и из PTB-in-process пути (чтобы
-  Фазу 2 можно было выкатить даже если Фаза 3 ещё не готова).
-* k8s: новый overlay `k8s/overlays/scaled/` (копия `webhook/` +
-  `webhook-receiver` Deployment, Service, HPA).
-* Тесты: receiver happy path, плохой secret → 401, дубль → 200 без
-  публикации, ошибка публикации → 503.
+**Сделано:**
 
-Деплоится: `webhook-receiver` может стоять перед Telegram; хэндлеры
-всё ещё в одном `bot`-поде, потребляющем из шард-очередей (Фаза 3
-превращает это в полноценный шардинг; пока одна очередь). На этом шаге
-`bot` Deployment теряет Ingress — Telegram общается только с
-receiver'ом.
+* Новый пакет `src/receiver/`:
+  * `app.py` — FastAPI-приложение с одним роутом: `POST /{bot_token}`
+    (путь выводится из токена, так что у каждого бота свой URL).
+  * Валидирует `X-Telegram-Bot-Api-Secret-Token`.
+  * Переиспользует дедуп-хелпер Фазы 1 через `claim_update()`.
+  * Публикует сырой JSON в брокер, кладя `chat_id` в заголовки
+    сообщения (routing key прошит под `x-consistent-hash` exchange
+    Фазы 3).
+  * `/healthz` (liveness) + `/readyz` (Redis + брокер доступны).
+* `publisher.py` — асинхронный aio-pika publisher с
+  `connect_robust()` и publisher confirms. Объявляет `updates_queue`
+  как durable. В Фазе 3 `exchange=""` заменяется на consistent-hash
+  exchange; call sites не меняются.
+* `chat_id.py` — best-effort извлечение `chat_id` из всех вариантов
+  апдейтов (message, edited_*, channel_post, business_*,
+  callback_query, business_connection, inline_query, …).
+* `runner.py` — bootstrap uvicorn для `MODE=receiver`.
+* `main.py` — ветка на `settings.mode == "receiver"` (polling /
+  webhook / receiver). Один образ, разные команды.
+* `src/config/settings.py` — новые env-переменные:
+  `UPDATES_EXCHANGE` (по умолчанию `""` → встроенный direct exchange
+  в Фазе 2), `UPDATES_QUEUE` (`updates_queue`), в `MODE` Literal
+  добавлен `receiver`.
+* `requirements.txt` — `fastapi`, `uvicorn[standard]`, `aio-pika`.
+* k8s: новый overlay `k8s/overlays/scaled/` с Deployment
+  `webhook-receiver` (базово 2 реплики), Service, Ingress, HPA
+  (2–10 реплик на 70 % CPU). В ConfigMap overlay'я прибиты
+  `MODE=receiver` и `UPDATES_QUEUE`.
+* Тесты: 24 новых теста в `tests/integration/test_receiver.py` —
+  happy path, неверный secret → 401, отсутствующий secret → 401,
+  пустой secret (bypass), битый JSON → 400, нет `update_id` → 400,
+  дубль → 200 без публикации, ошибка publisher'а → 503, апдейт без
+  чата → публикуется с `chat_id=None`, `/healthz`, `/readyz` (ok /
+  брокер отвалился / Redis недоступен) и параметризованная матрица
+  для `extract_chat_id`.
+
+Деплоится: `webhook-receiver` встаёт перед Telegram за публичным
+Ingress и публикует в RabbitMQ. В Фазе 3 пишется шардированный
+consumer, который заменяет одиночный Deployment `bot`. До этого
+overlay `scaled` годится для staging-валидации producer-стороны —
+в проде продолжайте крутить overlay `webhook`, пока Фаза 3 не
+приземлилась.
 
 ### Фаза 3 — Consistent-hash шардинг + handler worker
 
@@ -471,7 +491,7 @@ business-соединений, ограниченные KV-записи). Пот
 ## 7. Чеклист деливераблов
 
 - [x] Фаза 1: дедуп + 429 + DLQ + метрики + тесты
-- [ ] Фаза 2: `webhook-receiver` + `MODE=receiver` + overlay `scaled` + тесты
+- [x] Фаза 2: `webhook-receiver` + `MODE=receiver` + overlay `scaled` + тесты
 - [ ] Фаза 3: consistent-hash exchange + таска `handle_update` +
       StatefulSet-на-шард + тесты порядка
 - [ ] Фаза 4.1: бэкенд `src/databases/postgres/` + регистрация в factory + зависимости

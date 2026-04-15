@@ -124,31 +124,52 @@ Delivered:
 Deployable: still single `bot` replica, but no duplicate work and no
 silent failures.
 
-### Phase 2 — Extract `webhook-receiver`
+### Phase 2 — Extract `webhook-receiver` ✅ shipped
 
 Goal: decouple ingestion from handlers. Still one worker fleet, but the
 hot path is now trivial.
 
-* New package `src/receiver/`:
-  * `app.py` — FastAPI (or aiohttp) app with one route: `POST /webhook/{secret_path}`.
-  * Validates `X-Telegram-Bot-Api-Secret-Token`.
-  * Uses the Phase-1 dedup helper.
-  * Publishes raw JSON to `updates` exchange with `routing_key=str(chat_id)`.
-  * `/healthz` + `/readyz`.
-* `main.py`: add `MODE=receiver` branch (polling / webhook / receiver).
-  Kept in one image — the k8s Deployment just overrides the command.
-* `src/tasks/receiver_publish.py`: thin wrapper around aio-pika /
-  kombu producer. Reused by PTB-in-process path too (so Phase 2 can
-  ship even if Phase 3 isn't live).
-* k8s: new overlay `k8s/overlays/scaled/` (copy `webhook/` + add
-  `webhook-receiver` Deployment, Service, HPA).
-* Tests: receiver happy path, bad secret → 401, duplicate → 200 no
-  publish, publish failure → 503.
+**Shipped:**
 
-Deployable: `webhook-receiver` can front Telegram; handlers still run in
-the single `bot` pod consuming from the shard queues (Phase 3 makes this
-sharded, for now it's a single queue). At this point `bot` Deployment
-loses its Ingress — Telegram talks only to the receiver.
+* New package `src/receiver/`:
+  * `app.py` — FastAPI app with one route: `POST /{bot_token}` (path
+    derived from the token so each bot gets a distinct URL).
+  * Validates `X-Telegram-Bot-Api-Secret-Token`.
+  * Reuses the Phase-1 dedup helper via `claim_update()`.
+  * Publishes raw JSON to the broker with `chat_id` in headers (routing
+    key plumbed for Phase 3's `x-consistent-hash` exchange).
+  * `/healthz` (liveness) + `/readyz` (Redis + broker reachable).
+* `publisher.py` — async aio-pika publisher with `connect_robust()` and
+  publisher confirms. Declares `updates_queue` as durable. Phase 3 will
+  swap `exchange=""` for the consistent-hash exchange; call sites are
+  unchanged.
+* `chat_id.py` — best-effort `chat_id` extraction across all update
+  variants (message, edited_*, channel_post, business_*, callback_query,
+  business_connection, inline_query, …).
+* `runner.py` — uvicorn bootstrap for `MODE=receiver`.
+* `main.py` — branches on `settings.mode == "receiver"` (polling /
+  webhook / receiver). One image, different command.
+* `src/config/settings.py` — new env vars: `UPDATES_EXCHANGE` (default
+  `""` → default direct exchange in Phase 2), `UPDATES_QUEUE`
+  (`updates_queue`), extended `MODE` Literal with `receiver`.
+* `requirements.txt` — `fastapi`, `uvicorn[standard]`, `aio-pika`.
+* k8s: new overlay `k8s/overlays/scaled/` with `webhook-receiver`
+  Deployment (2 replicas baseline), Service, Ingress, HPA (2–10 replicas
+  on 70 % CPU). `MODE=receiver` and `UPDATES_QUEUE` pinned in the
+  overlay ConfigMap.
+* Tests: 24 new tests in `tests/integration/test_receiver.py` covering
+  happy path, bad secret → 401, missing secret → 401, empty-secret
+  bypass, invalid JSON → 400, missing `update_id` → 400, duplicate →
+  200 without publish, publisher error → 503, update without chat →
+  published with `chat_id=None`, `/healthz`, `/readyz` (ok / broker
+  disconnected / Redis down), and a parametrized `extract_chat_id`
+  matrix.
+
+Deployable: `webhook-receiver` fronts Telegram behind the public
+Ingress; publishes to RabbitMQ. Phase 3 wires the sharded consumer that
+replaces the single `bot` Deployment. In the meantime, the `scaled`
+overlay is suitable for staging validation of the producer side — keep
+running the `webhook` overlay in production until Phase 3 lands.
 
 ### Phase 3 — Consistent-hash sharding + handler worker
 
@@ -449,7 +470,7 @@ before shard count is.
 ## 7. Deliverables checklist
 
 - [x] Phase 1: dedup + 429 + DLQ + metrics + tests
-- [ ] Phase 2: `webhook-receiver` + `MODE=receiver` + `scaled` overlay + tests
+- [x] Phase 2: `webhook-receiver` + `MODE=receiver` + `scaled` overlay + tests
 - [ ] Phase 3: consistent-hash exchange + `handle_update` task +
       StatefulSet-per-shard + ordering tests
 - [ ] Phase 4.1: `src/databases/postgres/` backend + factory registration + deps

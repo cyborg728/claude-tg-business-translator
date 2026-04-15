@@ -28,5 +28,10 @@ uuid-utils>=0.10.0
 # ── HTTP (for webhook set-up and misc) ──────────────────────────────────────
 httpx>=0.28.0
 
+# ── Webhook receiver (MODE=receiver, Phase 2) ───────────────────────────────
+fastapi>=0.115.0
+uvicorn[standard]>=0.32.0
+aio-pika>=9.4.0
+
 # ── Observability (in-process counters; HTTP exposition comes in Phase 5) ───
 prometheus-client>=0.21.0
