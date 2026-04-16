@@ -6,7 +6,7 @@ Postgres + Alembic** and **Fluent** for i18n. Every piece is swappable —
 all repositories sit behind interfaces under `src/databases/`, and
 `DATABASE_BACKEND={sqlite,postgres}` picks the concrete implementation.
 
-> **v3 status — Phase 4.3 shipped.** v3 inherits the v2 code and adds
+> **v3 status — Phase 4.4 shipped.** v3 inherits the v2 code and adds
 > horizontal scalability: the webhook receiver is split out from the PTB
 > handler process, updates are sharded by `chat_id` into RabbitMQ, and
 > delivery is token-bucketed against Telegram's global / per-chat rate
@@ -25,7 +25,11 @@ all repositories sit behind interfaces under `src/databases/`, and
 > **Phase 4.3** — `scripts/migrate_sqlite_to_postgres.py`: one-shot
 > data copy with preflight (refuses non-empty targets), batched
 > `INSERT ... ON CONFLICT DO NOTHING`, row-count verification, and a
-> JSON migration report.
+> JSON migration report. **Phase 4.4** —
+> `scripts/migrate_postgres_to_sqlite.py`: symmetric reverse copier
+> for tier-2 rollback, with a three-tier runbook (config flip <2 min
+> / reverse copy <30 min / nuclear snapshot restore) in
+> `MIGRATION_V2_TO_V3.md` §4.4.
 > See [`MIGRATION_V2_TO_V3.md`](./MIGRATION_V2_TO_V3.md) for the
 > step-by-step plan and [🎯 v3 — horizontal scaling](#-v3--horizontal-scaling)
 > below for the target architecture.
@@ -102,9 +106,11 @@ Highlights:
   preflights (refuses non-empty targets), batches
   `INSERT ... ON CONFLICT DO NOTHING`, coerces UUID/tz/bool types, and
   writes a JSON migration report. Flip with
-  `DATABASE_BACKEND=postgres` + `POSTGRES_DSN=postgresql://…`. Phases
-  4.4–4.5 add the reverse script / rollback runbook and a k8s Postgres
-  overlay.
+  `DATABASE_BACKEND=postgres` + `POSTGRES_DSN=postgresql://…`. Phase
+  4.4 adds `scripts/migrate_postgres_to_sqlite.py`: the symmetric
+  reverse copier used for tier-2 rollback (§4.4 in the migration
+  doc — config flip / reverse copy / nuclear snapshot restore).
+  Phase 4.5 adds the k8s Postgres overlay.
 * **k8s**: new overlay `k8s/overlays/scaled` with `webhook-receiver`
   Deployment + Service + Ingress, HPAs (CPU and KEDA/RabbitMQ queue
   depth), and the existing worker Deployments reused.
@@ -162,7 +168,8 @@ Non-goals for v3:
 ├── scripts/
 │   ├── backup_sqlite.sh
 │   ├── backup_rabbitmq.sh
-│   └── migrate_sqlite_to_postgres.py  # Phase 4.3 v2→v3 data copy
+│   ├── migrate_sqlite_to_postgres.py  # Phase 4.3 v2→v3 data copy
+│   └── migrate_postgres_to_sqlite.py  # Phase 4.4 tier-2 rollback copier
 ├── k8s/
 │   ├── base/                     # Namespace, ConfigMap, Secret, PVCs, Redis, RabbitMQ,
 │   │                             # worker deployments, migrate Job, backup CronJobs
@@ -518,6 +525,7 @@ The runner uses `pyproject.toml [tool.pytest.ini_options]`:
 | Redis cache                   | `tests/integration/test_redis_cache.py`                       | save/read, wait flag, TTL semantics (via fakeredis) |
 | Alembic migrations            | `tests/integration/test_alembic_migrations.py`                | SQLite live + Postgres offline-SQL (UUID/TIMESTAMPTZ) + opt-in live PG |
 | SQLite→Postgres migrate       | `tests/unit/test_migrate_script.py` + `tests/integration/test_migrate_script.py` | `coerce_row`, URL validators, `_batched`, `_redact`, argparse; URL rejection + opt-in live PG copy/refusal |
+| Postgres→SQLite rollback      | `tests/unit/test_migrate_postgres_to_sqlite.py` + `tests/integration/test_migrate_postgres_to_sqlite_script.py` | inverted `coerce_row` (UUID→CHAR(36)), bool/tz pass-through, drift-check against forward script + SQLite `Base.metadata`; opt-in live PG round-trip |
 | Delivery facade               | `tests/unit/test_delivery_facade.py`                          | `send_text` / `send_photo` / `edit_text` payloads   |
 | Delivery task                 | `tests/integration/test_delivery_task.py`                     | routing, rate-limit, 429 → Retry, 5xx, DLQ, metrics |
 | Update dedup                  | `tests/integration/test_idempotency.py`                       | first-call wins, TTL, non-destructive `has_seen`    |

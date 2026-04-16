@@ -282,8 +282,8 @@ the backend swap and the data copy are independently reversible.
   unchanged), CREATE TABLE DDL asserts native `UUID` / `TIMESTAMPTZ` /
   `BOOLEAN` types, factory dispatch (sqlite/postgres without
   connecting, unknown backend rejected by pydantic `Literal`).
-* Still remaining for 4.3+: data migration script, k8s overlay, docs
-  cutover runbook.
+* Still remaining for 4.5+: k8s overlay for Postgres, backup-postgres
+  CronJob, cutover runbook.
 * **Follow-up — done (post-4.1):** Postgres primary key is now native
   `UUID(as_uuid=True)` and every DTO exposes `id: uuid.UUID | None`.
   The SQLite backend reuses the existing `CHAR(36)` storage via a
@@ -424,26 +424,89 @@ URL validators, `coerce_row`, `_batched`, `verify_row_counts`, argparse,
    * Monitor: handler error rate, `delivery_queue` depth, Postgres
      connections, slow-query log.
 
-#### 4.4 Rollback plan
+#### 4.4 Rollback plan — **Shipped**
 
-Until SQLite is deleted (keep for 7 days post-cutover):
+Keep the SQLite PVC + Phase-0 snapshot for **7 days** post-cutover.
+Three tiers, in order of preference:
 
-* **Config rollback** (< 2 min): flip
-  `DATABASE_BACKEND=sqlite` + point volume mount back, roll workers.
-  Loses writes that happened on Postgres since cutover — acceptable
-  only if we catch a problem within minutes.
-* **Data rollback** (< 30 min): export Postgres deltas since cutover
-  (all rows with `updated_at > cutover_ts`), hand-merge into SQLite
-  snapshot with the reverse of the migration script (`scripts/
-  migrate_postgres_to_sqlite.py`, symmetric). Use only if app is
-  confirmed broken and downtime is acceptable.
-* **Nuclear**: restore the Phase-0 SQLite snapshot, accept lost
-  writes. Only if the above can't complete.
+##### Tier 1 — Config rollback (< 2 min, lossy)
 
-After the 7-day soak: delete `tg-bot-data` PVC, remove SQLite backend
-from default factory path (keep the code for dev), update the
-`backup-sqlite` CronJob to become `backup-postgres` (`pg_dump -Fc`,
-gzip, same PVC + retention).
+Use when: a problem shows up within minutes of cutover and the volume
+of post-cutover writes is negligible.
+
+1. Flip ConfigMap: `DATABASE_BACKEND=sqlite`, re-attach the SQLite
+   volume mount (`DATABASE_PATH=/data/bot.db`).
+2. `kubectl rollout restart deployment/worker-tasks
+   deployment/worker-delivery statefulset/update-consumer
+   deployment/webhook-receiver`.
+3. Verify handler error rate + `delivery_queue` depth settle.
+
+Trade-off: writes that landed on Postgres since cutover are lost. Only
+acceptable if the Postgres side is confirmed broken and only a handful
+of minutes of traffic passed.
+
+##### Tier 2 — Data rollback via reverse script (< 30 min, lossless)
+
+Use when: Postgres is broken and tier 1's write loss is unacceptable.
+This tier requires a short maintenance window.
+
+1. **Freeze writes on the Postgres side.** Scale workers to 0:
+   ```
+   kubectl scale deployment/worker-tasks deployment/worker-delivery \
+       deployment/webhook-receiver --replicas=0
+   kubectl scale statefulset/update-consumer --replicas=0
+   ```
+2. **Run the reverse copier** against a fresh SQLite file. The script
+   performs URL validation, `alembic upgrade head` on the SQLite
+   target, empty-target preflight, per-table copy with `ON CONFLICT
+   DO NOTHING`, and row-count verification, then writes a JSON report:
+   ```
+   python -m scripts.migrate_postgres_to_sqlite \
+       --source "$POSTGRES_DSN_SYNC" \
+       --target sqlite:///data/bot-rollback.db
+   ```
+   A non-zero exit code means verification failed; inspect the report
+   in `backups/rollback-<ts>.json` and rerun after truncating the
+   target.
+3. **Flip config.** `DATABASE_BACKEND=sqlite`,
+   `DATABASE_PATH=/data/bot-rollback.db`, re-attach the SQLite volume
+   mount (rebind the `tg-bot-data` PVC if it was detached).
+4. **Restart workers**, scale back to normal replica counts. Queued
+   updates drain through.
+
+Properties of the reverse script:
+
+* Symmetric to `migrate_sqlite_to_postgres.py` — same table order,
+  same batch mechanics, same report schema.
+* `coerce_row` converts Postgres `uuid.UUID` → hyphenated CHAR(36)
+  strings on the way out — matches the v2 on-disk format that
+  `UuidAsString36` round-trips on read.
+* Booleans and timestamps pass through unchanged; SQLAlchemy's SQLite
+  `Boolean` and `DateTime` accept native `bool`/`datetime` values.
+* Refuses a non-empty target: operator truncates the SQLite file (or
+  passes a fresh path) and reruns if a run crashed mid-copy.
+* Credentials redacted in the JSON report (`***` for password).
+
+##### Tier 3 — Nuclear: restore Phase-0 SQLite snapshot
+
+Use when: tiers 1 + 2 can't complete (e.g. Postgres is unreadable, or
+the reverse script fails on corrupt data). Accept lost writes.
+
+1. Rehydrate the SQLite file from the Phase-0 snapshot (`backups/
+   pre-cutover-*.db`).
+2. Flip config as in tier 1.
+3. Restart workers, scale back up.
+
+All post-cutover writes are gone. Document what was lost from the
+Postgres side for manual reconciliation if feasible.
+
+##### After the 7-day soak
+
+* Delete `tg-bot-data` PVC.
+* Remove SQLite backend from the default factory path (keep the code
+  for local dev and tests).
+* Rename `backup-sqlite` CronJob → `backup-postgres` (`pg_dump -Fc`,
+  gzip, same PVC + retention window).
 
 #### 4.5 k8s & ops changes
 
@@ -560,7 +623,7 @@ before shard count is.
 - [x] Phase 4.1 follow-up: native `uuid.UUID` in DTOs + Postgres `UUID(as_uuid=True)` + SQLite `UuidAsString36` TypeDecorator
 - [x] Phase 4.2: dual-dialect Alembic migration (`0002_postgres_parity`) + dialect-aware `env.py` + offline-SQL + opt-in live-Postgres tests
 - [x] Phase 4.3: `scripts/migrate_sqlite_to_postgres.py` + unit tests (coerce_row, validators, argparse, redact) + opt-in live-Postgres integration tests (fixture copy, non-empty refusal, JSON report via CLI)
-- [ ] Phase 4.4: reverse script + documented rollback runbook
+- [x] Phase 4.4: reverse script + documented rollback runbook
 - [ ] Phase 4.5: `k8s/base/postgres.yaml` + `managed-postgres` overlay + `backup-postgres` CronJob; drop `tg-bot-data` PVC mount from workers
 - [ ] Phase 5: HPAs + KEDA + Prometheus metrics + dashboard
 - [ ] Phase 6: cutover, cleanup, README consolidation
