@@ -282,8 +282,8 @@ the backend swap and the data copy are independently reversible.
   unchanged), CREATE TABLE DDL asserts native `UUID` / `TIMESTAMPTZ` /
   `BOOLEAN` types, factory dispatch (sqlite/postgres without
   connecting, unknown backend rejected by pydantic `Literal`).
-* Still remaining for 4.2+: Alembic `0002_postgres_parity.py`, data
-  migration script, k8s overlay, docs cutover runbook.
+* Still remaining for 4.3+: data migration script, k8s overlay, docs
+  cutover runbook.
 * **Follow-up — done (post-4.1):** Postgres primary key is now native
   `UUID(as_uuid=True)` and every DTO exposes `id: uuid.UUID | None`.
   The SQLite backend reuses the existing `CHAR(36)` storage via a
@@ -292,35 +292,52 @@ the backend swap and the data copy are independently reversible.
   dialects without touching on-disk bytes. `uuid7()` is the single
   shared default; handlers drop the `id=""` placeholder.
 
-#### 4.2 Alembic: dual-dialect migrations
+#### 4.2 Alembic: dual-dialect migrations — **Shipped**
 
-The existing `alembic/versions/0001_initial_schema.py` was written for
-SQLite. Options, from cleanest to pragmatic:
+Both backends are now driven from the **same** revision chain. One
+`alembic upgrade head` works against either dialect; each revision is a
+no-op on the "other" dialect, so Alembic's version table stays in lock-step.
 
-* **Preferred: replay, don't translate.** Keep 0001 as-is for SQLite
-  history, add `0002_postgres_parity.py` that is a no-op on SQLite and
-  creates the parallel schema on Postgres. Drives both backends from
-  one `alembic upgrade head`.
-
-  Inside the migration:
-  ```python
-  if context.get_bind().dialect.name == "postgresql":
-      # CREATE TABLE ... with UUID / TIMESTAMPTZ
-  else:
-      # pass — SQLite already has the tables from 0001
-  ```
-
-* **Alternative: separate version tables.** Two Alembic branches
-  (`--rev-id` prefix per dialect). More moving parts; avoid unless the
-  schemas genuinely diverge.
-
-Policy going forward: every new migration is tested against **both**
-dialects in CI (testcontainers Postgres + in-memory SQLite).
-
-* `alembic/env.py` stays unchanged — it already reads
-  `settings.database_url_sync`.
+* `alembic/versions/0001_initial_schema.py` — guarded with
+  `if op.get_bind().dialect.name == "postgresql": return` at the top of
+  both `upgrade()` and `downgrade()`. Unchanged for SQLite; no-op on
+  Postgres. Preserves the committed v2 SQLite history byte-for-byte.
+* `alembic/versions/0002_postgres_parity.py` — the mirror: no-op on
+  SQLite, creates the parallel schema on Postgres using dialect-native
+  types (`postgresql.UUID(as_uuid=True)`, `TIMESTAMPTZ`, native
+  `BOOLEAN`) plus the `uq_kv_store_owner_key` composite unique
+  constraint the Phase-4.1 kv-store repo's `ON CONFLICT ON CONSTRAINT`
+  upsert relies on.
+* `alembic/env.py` — now picks the right declarative `Base` based on the
+  active URL's dialect (`from src.databases.postgres.models import Base`
+  on Postgres, SQLite otherwise) so `compare_type=True` autogen runs
+  against dialect-native metadata. `render_as_batch` is enabled only on
+  SQLite (it is a workaround for SQLite's missing `ALTER TABLE`, and
+  leaving it on for Postgres would degrade autogen there).
 * `migrate-job.yaml` (k8s) stays unchanged — it just runs
   `alembic upgrade head` with the new URL.
+
+Tests (`tests/integration/test_alembic_migrations.py`, 10 assertions,
+10 passing):
+
+* SQLite path: live upgrade/downgrade against a throwaway file DB;
+  schema matches `SqliteBase.metadata`; idempotent re-upgrade; captured
+  offline SQL shows `VARCHAR(36)`/no `UUID`/no `TIMESTAMPTZ`.
+* Postgres path: Alembic `--sql` offline mode against a dummy
+  `postgresql://` URL (no live server needed). Asserts that every
+  metadata table gets `CREATE TABLE`, every PK is `UUID NOT NULL`, all
+  timestamps are `TIMESTAMP WITH TIME ZONE`, the
+  `uq_kv_store_owner_key` constraint is emitted, and both revision rows
+  land in `alembic_version`. A downgrade-from-`0002` path asserts all
+  four tables are dropped.
+* Opt-in live-Postgres test (`POSTGRES_TEST_URL=…` in the environment):
+  real upgrade/idempotent-re-upgrade/downgrade-to-base against a running
+  Postgres. Skipped by default so the suite stays hermetic; CI wires it
+  up with a Postgres service container.
+
+Policy going forward: every new migration is tested against **both**
+dialects in CI (live SQLite + live Postgres service; offline SQL diff
+against the postgres dialect as a hermetic lower bound in unit tests).
 
 #### 4.3 Data migration (one-shot, v2 SQLite → v3 Postgres)
 
@@ -530,7 +547,7 @@ before shard count is.
       StatefulSet-per-shard + ordering tests
 - [x] Phase 4.1: `src/databases/postgres/` backend + factory registration + deps
 - [x] Phase 4.1 follow-up: native `uuid.UUID` in DTOs + Postgres `UUID(as_uuid=True)` + SQLite `UuidAsString36` TypeDecorator
-- [ ] Phase 4.2: dual-dialect Alembic migration + CI job against both dialects
+- [x] Phase 4.2: dual-dialect Alembic migration (`0002_postgres_parity`) + dialect-aware `env.py` + offline-SQL + opt-in live-Postgres tests
 - [ ] Phase 4.3: `scripts/migrate_sqlite_to_postgres.py` + integration tests (fixture copy, idempotency, refusals)
 - [ ] Phase 4.4: reverse script + documented rollback runbook
 - [ ] Phase 4.5: `k8s/base/postgres.yaml` + `managed-postgres` overlay + `backup-postgres` CronJob; drop `tg-bot-data` PVC mount from workers

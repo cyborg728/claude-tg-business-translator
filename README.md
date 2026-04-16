@@ -6,7 +6,7 @@ Postgres + Alembic** and **Fluent** for i18n. Every piece is swappable —
 all repositories sit behind interfaces under `src/databases/`, and
 `DATABASE_BACKEND={sqlite,postgres}` picks the concrete implementation.
 
-> **v3 status — Phase 4.1 shipped.** v3 inherits the v2 code and adds
+> **v3 status — Phase 4.2 shipped.** v3 inherits the v2 code and adds
 > horizontal scalability: the webhook receiver is split out from the PTB
 > handler process, updates are sharded by `chat_id` into RabbitMQ, and
 > delivery is token-bucketed against Telegram's global / per-chat rate
@@ -19,8 +19,10 @@ all repositories sit behind interfaces under `src/databases/`, and
 > StatefulSet that preserves per-chat ordering. **Phase 4.1** —
 > `src/databases/postgres/` backend with native `UUID` /
 > `TIMESTAMPTZ` / `BOOLEAN` and `INSERT ... ON CONFLICT` upserts;
-> DTOs carry `id: uuid.UUID`. See
-> [`MIGRATION_V2_TO_V3.md`](./MIGRATION_V2_TO_V3.md) for the
+> DTOs carry `id: uuid.UUID`. **Phase 4.2** — dual-dialect Alembic
+> chain (`0002_postgres_parity`): one `alembic upgrade head` works
+> against either backend; `env.py` picks the dialect-native `Base`.
+> See [`MIGRATION_V2_TO_V3.md`](./MIGRATION_V2_TO_V3.md) for the
 > step-by-step plan and [🎯 v3 — horizontal scaling](#-v3--horizontal-scaling)
 > below for the target architecture.
 
@@ -87,11 +89,14 @@ Highlights:
   v2's single replica but blocks multi-replica workers; Phase 4.1 adds a
   `src/databases/postgres/` backend (native `UUID` / `TIMESTAMPTZ` /
   `BOOLEAN`, `INSERT ... ON CONFLICT` upserts, `asyncpg` for the app
-  path and `psycopg` for Alembic). Flip with
-  `DATABASE_BACKEND=postgres` + `POSTGRES_DSN=postgresql://…`. Phases
-  4.2–4.5 add the dual-dialect Alembic migration, a
-  `scripts/migrate_sqlite_to_postgres.py` one-shot, and a k8s
-  Postgres overlay.
+  path and `psycopg` for Alembic). Phase 4.2 wires Alembic up as a
+  dual-dialect chain — `0002_postgres_parity` is a no-op on SQLite and
+  builds the Postgres-native schema (UUID / TIMESTAMPTZ / BOOLEAN +
+  `uq_kv_store_owner_key`) on Postgres, so one `alembic upgrade head`
+  works against either backend. Flip with `DATABASE_BACKEND=postgres`
+  + `POSTGRES_DSN=postgresql://…`. Phases 4.3–4.5 add a
+  `scripts/migrate_sqlite_to_postgres.py` one-shot and a k8s Postgres
+  overlay.
 * **k8s**: new overlay `k8s/overlays/scaled` with `webhook-receiver`
   Deployment + Service + Ingress, HPAs (CPU and KEDA/RabbitMQ queue
   depth), and the existing worker Deployments reused.
@@ -124,7 +129,7 @@ Non-goals for v3:
 | Business accounts (`business_message`) | `BusinessConnectionHandler` + dedicated `MessageHandler` filter   |
 | Error handling                         | Global `error_handler` + catch-all `/unknown` handler             |
 | UUID v7 primary keys                   | `uuid_utils.uuid7` via `src/utils/ids.py`                         |
-| Alembic migrations                     | `alembic/versions/0001_initial_schema.py`                         |
+| Alembic migrations                     | Dual-dialect: `0001_initial_schema.py` (SQLite) + `0002_postgres_parity.py` (Postgres) |
 | k3s manifests                          | Kustomize `base/` + `overlays/polling` + `overlays/webhook`       |
 | DB & RabbitMQ backups                  | CronJobs to a dedicated PVC; local shell equivalents in `scripts` |
 | Test suite                             | `pytest` — unit + SQLite + fakeredis + Alembic (see "Tests")      |
@@ -136,9 +141,11 @@ Non-goals for v3:
 ```
 .
 ├── main.py                       # Entrypoint (reads MODE and runs polling/webhook)
-├── alembic/                      # Alembic migrations
-│   ├── env.py                    # Uses settings.database_url_sync
-│   └── versions/0001_initial_schema.py
+├── alembic/                      # Dual-dialect Alembic migrations
+│   ├── env.py                    # Picks dialect-native Base from settings.database_url_sync
+│   └── versions/
+│       ├── 0001_initial_schema.py      # SQLite schema; no-op on Postgres
+│       └── 0002_postgres_parity.py     # Postgres UUID / TIMESTAMPTZ; no-op on SQLite
 ├── alembic.ini
 ├── requirements.txt
 ├── Dockerfile
@@ -256,7 +263,12 @@ alembic downgrade -1
 ```
 
 `alembic/env.py` reads the URL from `settings.database_url_sync`, so it works
-from both CLI and the k3s `migrate-job.yaml`.
+from both CLI and the k3s `migrate-job.yaml`. The revision chain is dual-dialect:
+`0001_initial_schema` creates the SQLite schema and is a no-op on Postgres;
+`0002_postgres_parity` creates the Postgres-native schema (UUID /
+TIMESTAMPTZ / BOOLEAN + `uq_kv_store_owner_key`) and is a no-op on SQLite.
+One `alembic upgrade head` works against either backend — no branches,
+no dialect flags.
 
 ---
 
@@ -495,7 +507,7 @@ The runner uses `pyproject.toml [tool.pytest.ini_options]`:
 | KV-store repo (SQLite)        | `tests/integration/test_sqlite_kv_repository.py`              | set/get/delete + isolation by owner                 |
 | Session rollback              | `tests/integration/test_session_rollback.py`                  | exception inside session must roll back             |
 | Redis cache                   | `tests/integration/test_redis_cache.py`                       | save/read, wait flag, TTL semantics (via fakeredis) |
-| Alembic migrations            | `tests/integration/test_alembic_migrations.py`                | upgrade head, downgrade base, idempotent re-run     |
+| Alembic migrations            | `tests/integration/test_alembic_migrations.py`                | SQLite live + Postgres offline-SQL (UUID/TIMESTAMPTZ) + opt-in live PG |
 | Delivery facade               | `tests/unit/test_delivery_facade.py`                          | `send_text` / `send_photo` / `edit_text` payloads   |
 | Delivery task                 | `tests/integration/test_delivery_task.py`                     | routing, rate-limit, 429 → Retry, 5xx, DLQ, metrics |
 | Update dedup                  | `tests/integration/test_idempotency.py`                       | first-call wins, TTL, non-destructive `has_seen`    |
