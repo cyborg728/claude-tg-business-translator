@@ -1,12 +1,12 @@
 # Telegram Business Bot — v3
 
 Foundational scaffolding for a Telegram Business Account bot. Built around
-**python-telegram-bot 22.x**, **Celery + RabbitMQ**, **Redis**, **SQLite +
-Alembic** and **Fluent** for i18n. Every piece is swappable — all repositories
-sit behind interfaces, so moving off SQLite (to Postgres, for example) is a
-matter of adding a sibling package under `src/databases/`.
+**python-telegram-bot 22.x**, **Celery + RabbitMQ**, **Redis**, **SQLite or
+Postgres + Alembic** and **Fluent** for i18n. Every piece is swappable —
+all repositories sit behind interfaces under `src/databases/`, and
+`DATABASE_BACKEND={sqlite,postgres}` picks the concrete implementation.
 
-> **v3 status — Phase 3 shipped.** v3 inherits the v2 code and adds
+> **v3 status — Phase 4.1 shipped.** v3 inherits the v2 code and adds
 > horizontal scalability: the webhook receiver is split out from the PTB
 > handler process, updates are sharded by `chat_id` into RabbitMQ, and
 > delivery is token-bucketed against Telegram's global / per-chat rate
@@ -16,7 +16,10 @@ matter of adding a sibling package under `src/databases/`.
 > `scaled` overlay with HPA. **Phase 3** — `x-consistent-hash`
 > exchange + N shard queues, `handle_update` Celery task with a
 > long-lived per-worker PTB `Application`, `update-consumer`
-> StatefulSet that preserves per-chat ordering. See
+> StatefulSet that preserves per-chat ordering. **Phase 4.1** —
+> `src/databases/postgres/` backend with native `UUID` /
+> `TIMESTAMPTZ` / `BOOLEAN` and `INSERT ... ON CONFLICT` upserts;
+> DTOs carry `id: uuid.UUID`. See
 > [`MIGRATION_V2_TO_V3.md`](./MIGRATION_V2_TO_V3.md) for the
 > step-by-step plan and [🎯 v3 — horizontal scaling](#-v3--horizontal-scaling)
 > below for the target architecture.
@@ -46,12 +49,14 @@ Telegram ─HTTPS─▶ Ingress ─▶ webhook-receiver (Deployment, HPA)
                                      │
                  ┌───────────────────┴───────────────────┐
                  ▼                                       ▼
-         worker-tasks                              worker-delivery
-       (PTB handlers + LLM,                      (generic deliver task,
-        HPA on queue depth)                       Redis token-bucket,
-                 │                                fixed replicas)
-                 ▼                                       ▼
-              DB / Redis                          Telegram Bot API
+       update-consumer                            worker-delivery
+     (StatefulSet per shard,                     (generic deliver task,
+      long-lived PTB app +                        Redis token-bucket,
+      handlers + LLM,                             fixed replicas)
+      --concurrency=1)                                   │
+                 │                                       ▼
+                 ▼                                 Telegram Bot API
+              DB / Redis
 ```
 
 Highlights:
@@ -66,17 +71,27 @@ Highlights:
   shard queue has a single in-flight consumer, so messages from one chat
   are serialized; different chats run in parallel across shards and worker
   replicas.
-* **`worker-tasks`** runs the PTB handlers outside the webhook hot path.
-  The update is reconstructed from the JSON payload and fed through the
-  existing dispatcher — handler code stays unchanged.
+* **`update-consumer`** (Phase 3) runs the PTB handlers outside the webhook
+  hot path. Each pod consumes exactly one `updates.shard.<i>` queue
+  (`--concurrency=1 --prefetch-multiplier=1`), so per-chat ordering is
+  preserved. The update is reconstructed from the JSON payload via
+  `Update.de_json` and fed through the existing dispatcher — handler
+  code stays unchanged. The pre-Phase-3 `tasks_queue` + generic
+  `worker-tasks` Deployment remains for slow side-tasks (smoke, future
+  LLM jobs) that don't need per-chat ordering.
 * **`worker-delivery`** stays as-is conceptually (generic `deliver` task +
   facade), but the rate-limiter is hardened: global bucket + per-chat
   bucket + 429 `retry_after` honoring + circuit-break to DLQ after N
   retries.
 * **State moves off the bot process.** SQLite on an RWO PVC is fine for
-  v2's single replica but blocks multi-replica workers; v3 plans for a
-  Postgres backend (code path already exists via `src/databases/factory.py`,
-  just needs a `postgres/` sibling).
+  v2's single replica but blocks multi-replica workers; Phase 4.1 adds a
+  `src/databases/postgres/` backend (native `UUID` / `TIMESTAMPTZ` /
+  `BOOLEAN`, `INSERT ... ON CONFLICT` upserts, `asyncpg` for the app
+  path and `psycopg` for Alembic). Flip with
+  `DATABASE_BACKEND=postgres` + `POSTGRES_DSN=postgresql://…`. Phases
+  4.2–4.5 add the dual-dialect Alembic migration, a
+  `scripts/migrate_sqlite_to_postgres.py` one-shot, and a k8s
+  Postgres overlay.
 * **k8s**: new overlay `k8s/overlays/scaled` with `webhook-receiver`
   Deployment + Service + Ingress, HPAs (CPU and KEDA/RabbitMQ queue
   depth), and the existing worker Deployments reused.
@@ -155,7 +170,8 @@ Non-goals for v3:
     ├── databases/
     │   ├── factory.py            # Picks the backend from settings.database_backend
     │   ├── interfaces/           # AbstractDatabase + I<Entity>Repository (backend-agnostic)
-    │   └── sqlite/               # SQLite implementation: models + repositories + db
+    │   ├── sqlite/               # SQLite implementation (CHAR(36) uuid via TypeDecorator)
+    │   └── postgres/             # Postgres implementation (native UUID / TIMESTAMPTZ, ON CONFLICT)
     ├── i18n/
     │   ├── translator.py         # Fluent-based per-user translator
     │   └── locales/
@@ -168,9 +184,10 @@ Non-goals for v3:
     └── utils/ids.py              # uuid7 / uuid7_str helpers
 ```
 
-Adding a new database backend? Create `src/databases/postgres/` that mirrors
-`src/databases/sqlite/`, implement the same `AbstractDatabase` + `I*Repository`
-classes and register it in `src/databases/factory.py`. No handler code changes.
+Adding a new database backend? Mirror `src/databases/sqlite/` /
+`src/databases/postgres/`, implement the same `AbstractDatabase` +
+`I*Repository` classes and register it in `src/databases/factory.py`. No
+handler code changes.
 
 ---
 

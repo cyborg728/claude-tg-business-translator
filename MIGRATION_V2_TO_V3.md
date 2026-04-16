@@ -529,6 +529,7 @@ before shard count is.
 - [x] Phase 3: consistent-hash exchange + `handle_update` task +
       StatefulSet-per-shard + ordering tests
 - [x] Phase 4.1: `src/databases/postgres/` backend + factory registration + deps
+- [x] Phase 4.1 follow-up: native `uuid.UUID` in DTOs + Postgres `UUID(as_uuid=True)` + SQLite `UuidAsString36` TypeDecorator
 - [ ] Phase 4.2: dual-dialect Alembic migration + CI job against both dialects
 - [ ] Phase 4.3: `scripts/migrate_sqlite_to_postgres.py` + integration tests (fixture copy, idempotency, refusals)
 - [ ] Phase 4.4: reverse script + documented rollback runbook

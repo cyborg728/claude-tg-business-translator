@@ -558,6 +558,7 @@ business-соединений, ограниченные KV-записи). Пот
 - [x] Фаза 3: consistent-hash exchange + таска `handle_update` +
       StatefulSet-на-шард + тесты порядка
 - [x] Фаза 4.1: бэкенд `src/databases/postgres/` + регистрация в factory + зависимости
+- [x] Фолоу-ап 4.1: нативный `uuid.UUID` в DTO + Postgres `UUID(as_uuid=True)` + SQLite `UuidAsString36` TypeDecorator
 - [ ] Фаза 4.2: dual-dialect Alembic-миграция + CI-прогон на обоих диалектах
 - [ ] Фаза 4.3: `scripts/migrate_sqlite_to_postgres.py` + integration-тесты (копия фикстуры, idempotency, отказы)
 - [ ] Фаза 4.4: обратный скрипт + задокументированный runbook отката
