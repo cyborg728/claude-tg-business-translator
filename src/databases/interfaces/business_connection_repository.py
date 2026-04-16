@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import uuid
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from datetime import datetime
@@ -9,10 +10,10 @@ from datetime import datetime
 
 @dataclass(slots=True)
 class BusinessConnectionDTO:
-    id: str                       # UUIDv7 primary key
     connection_id: str            # Telegram business_connection_id
     owner_telegram_user_id: int
     is_enabled: bool
+    id: uuid.UUID | None = None   # UUIDv7 primary key — assigned by repo on insert
     created_at: datetime | None = None
     updated_at: datetime | None = None
 

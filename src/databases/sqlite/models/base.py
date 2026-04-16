@@ -1,13 +1,52 @@
-"""SQLAlchemy declarative base and shared mixins."""
+"""SQLAlchemy declarative base and shared mixins.
+
+UUIDs are exposed to Python as :class:`uuid.UUID` across every backend.
+SQLite has no native UUID datatype, so we keep the existing
+``CHAR(36)`` with-hyphens storage and bridge it to :class:`uuid.UUID`
+via a :class:`TypeDecorator`. That preserves the historical on-disk
+format (no Alembic data migration needed) while giving the ORM and
+DTOs a typed identifier, identical to what the Postgres backend
+returns.
+"""
 
 from __future__ import annotations
 
+import uuid
 from datetime import datetime
 
 from sqlalchemy import DateTime, String, func
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
+from sqlalchemy.types import TypeDecorator
 
-from src.utils import uuid7_str
+from src.utils import uuid7
+
+
+class UuidAsString36(TypeDecorator):
+    """Stores ``uuid.UUID`` as a 36-char hyphenated string.
+
+    Exists so the SQLite backend can keep its existing ``CHAR(36)``
+    column while the Python layer always sees :class:`uuid.UUID`. Uses
+    the same storage format the bot has been writing since v2 — no data
+    migration required.
+    """
+
+    impl = String(36)
+    cache_ok = True
+
+    def process_bind_param(self, value, dialect):  # noqa: D401 - SA hook
+        if value is None:
+            return None
+        if isinstance(value, uuid.UUID):
+            return str(value)
+        # Tolerate str input (legacy callers / raw SQL) by round-tripping.
+        return str(uuid.UUID(value))
+
+    def process_result_value(self, value, dialect):  # noqa: D401 - SA hook
+        if value is None:
+            return None
+        if isinstance(value, uuid.UUID):
+            return value
+        return uuid.UUID(value)
 
 
 class Base(DeclarativeBase):
@@ -22,17 +61,12 @@ class Base(DeclarativeBase):
 
 
 class UuidV7PrimaryKeyMixin:
-    """UUIDv7 primary-key column.
+    """UUIDv7 primary-key column (:class:`uuid.UUID` in Python, CHAR(36) on disk)."""
 
-    Stored as a 36-char string so SQLite (and every other backend) can store
-    it natively without extra type adapters. UUIDv7 values sort monotonically
-    by creation time, giving B-tree-friendly primary keys.
-    """
-
-    id: Mapped[str] = mapped_column(
-        String(36),
+    id: Mapped[uuid.UUID] = mapped_column(
+        UuidAsString36(),
         primary_key=True,
-        default=uuid7_str,
+        default=uuid7,
     )
 
 

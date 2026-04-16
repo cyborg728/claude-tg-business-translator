@@ -43,7 +43,7 @@ def test_dto_from_telegram_user_first_name_fallback_to_empty():
     assert dto.first_name == ""
 
 
-def test_dto_id_left_blank_for_repository_to_fill():
-    """Repositories generate a UUIDv7 server-side; the DTO ``id`` is ignored."""
+def test_dto_id_left_unset_for_repository_to_fill():
+    """Repositories generate a UUIDv7 on insert; the DTO ``id`` is ``None`` until then."""
     dto = dto_from_telegram_user(_tg_user())
-    assert dto.id == ""
+    assert dto.id is None

@@ -284,15 +284,13 @@ the backend swap and the data copy are independently reversible.
   connecting, unknown backend rejected by pydantic `Literal`).
 * Still remaining for 4.2+: Alembic `0002_postgres_parity.py`, data
   migration script, k8s overlay, docs cutover runbook.
-* **Follow-up (next step):** switch the Postgres primary key from
-  `UUID(as_uuid=False)` to the native `uuid.UUID` object
-  (`as_uuid=True`) and refactor the code path accordingly — update
-  `UserDTO.id` / `BusinessConnectionDTO.id` / `MessageMappingDTO.id`
-  to carry a real `uuid.UUID`, fix the `_to_dto` translators, the
-  UUIDv7 factory, and every caller that currently compares or
-  interpolates the id as a string. Keeps storage unchanged but gives
-  the app layer a typed identifier and removes the only place the two
-  backends still disagree on Python-side type.
+* **Follow-up — done (post-4.1):** Postgres primary key is now native
+  `UUID(as_uuid=True)` and every DTO exposes `id: uuid.UUID | None`.
+  The SQLite backend reuses the existing `CHAR(36)` storage via a
+  `UuidAsString36` TypeDecorator (models/base.py) — no Alembic data
+  migration required — so the Python layer is fully typed across both
+  dialects without touching on-disk bytes. `uuid7()` is the single
+  shared default; handlers drop the `id=""` placeholder.
 
 #### 4.2 Alembic: dual-dialect migrations
 

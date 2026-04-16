@@ -1,26 +1,24 @@
 """SQLAlchemy declarative base and shared mixins — Postgres-native types.
 
-Mirrors :mod:`src.databases.sqlite.models.base` one-for-one but swaps the
-physical column types to their Postgres-native equivalents:
+Mirrors :mod:`src.databases.sqlite.models.base` one-for-one but swaps
+the physical column types to their Postgres-native equivalents:
 
-* ``id``          → ``UUID`` (not ``String(36)``)
-* ``created_at``  → ``TIMESTAMPTZ`` (same SQLAlchemy spelling, real type server-side)
+* ``id``          → native ``UUID`` (``as_uuid=True`` — Python-side
+  :class:`uuid.UUID`, database-side ``uuid``)
+* ``created_at``  → ``TIMESTAMPTZ`` (same SQLAlchemy spelling, native type)
 * ``Boolean``     → native ``BOOLEAN`` (no emulation)
-
-DTO shapes stay identical — ``UuidV7PrimaryKeyMixin.id`` is still exposed as
-``str`` via ``UUID(as_uuid=False)`` so the :class:`UserDTO` / other DTOs stay
-dialect-agnostic.
 """
 
 from __future__ import annotations
 
+import uuid
 from datetime import datetime
 
 from sqlalchemy import DateTime, func
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
-from src.utils import uuid7_str
+from src.utils import uuid7
 
 
 class Base(DeclarativeBase):
@@ -32,14 +30,15 @@ class Base(DeclarativeBase):
 class UuidV7PrimaryKeyMixin:
     """UUIDv7 primary-key column backed by Postgres' native ``uuid`` type.
 
-    ``as_uuid=False`` hands :class:`str` values back to the ORM, which keeps
-    the cross-dialect DTOs identical to SQLite's ``String(36)`` representation.
+    ``as_uuid=True`` hands back :class:`uuid.UUID` objects — matches the
+    SQLite backend (via :class:`UuidAsString36` TypeDecorator) so DTOs
+    stay dialect-agnostic and typed.
     """
 
-    id: Mapped[str] = mapped_column(
-        UUID(as_uuid=False),
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
         primary_key=True,
-        default=uuid7_str,
+        default=uuid7,
     )
 
 

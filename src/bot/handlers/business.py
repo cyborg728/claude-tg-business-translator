@@ -33,7 +33,6 @@ class BusinessHandlers:
         is_enabled = bool(bc.is_enabled)
         await self._deps.db.business_connections.upsert(
             BusinessConnectionDTO(
-                id="",
                 connection_id=bc.id,
                 owner_telegram_user_id=bc.user.id if bc.user else 0,
                 is_enabled=is_enabled,
@@ -96,7 +95,6 @@ class BusinessHandlers:
 
         await self._deps.db.message_mappings.add(
             MessageMappingDTO(
-                id="",
                 business_connection_id=conn_id,
                 user_telegram_id=bmsg.from_user.id,
                 user_chat_id=bmsg.chat.id,

@@ -17,7 +17,6 @@ def repo(sqlite_db) -> IBusinessConnectionRepository:
 
 def _dto(**overrides) -> BusinessConnectionDTO:
     base = dict(
-        id="",
         connection_id="conn-123",
         owner_telegram_user_id=42,
         is_enabled=True,

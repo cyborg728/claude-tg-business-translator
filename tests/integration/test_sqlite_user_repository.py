@@ -16,7 +16,6 @@ def repo(sqlite_db) -> IUserRepository:
 
 def _dto(**overrides) -> UserDTO:
     base = dict(
-        id="",
         telegram_user_id=42,
         username="alice",
         first_name="Alice",
@@ -34,8 +33,8 @@ async def test_implements_interface(sqlite_db):
 async def test_upsert_creates_row_with_uuid7_pk(repo):
     out = await repo.upsert(_dto())
     assert out.telegram_user_id == 42
-    parsed = uuid.UUID(out.id)
-    assert parsed.version == 7
+    assert isinstance(out.id, uuid.UUID)
+    assert out.id.version == 7
 
 
 async def test_upsert_then_get_roundtrips(repo):

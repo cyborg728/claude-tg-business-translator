@@ -8,8 +8,8 @@ from src.databases.interfaces.user_repository import UserDTO
 
 
 def dto_from_telegram_user(tg_user: TgUser) -> UserDTO:
+    # id is left unset — the repository's model assigns a UUIDv7 on insert.
     return UserDTO(
-        id="",  # filled in by the repository via UUIDv7 default
         telegram_user_id=tg_user.id,
         username=tg_user.username,
         first_name=tg_user.first_name or "",

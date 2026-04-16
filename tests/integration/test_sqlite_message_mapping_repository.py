@@ -19,7 +19,6 @@ def repo(sqlite_db) -> IMessageMappingRepository:
 
 def _dto(**overrides) -> MessageMappingDTO:
     base = dict(
-        id="",
         business_connection_id="conn-1",
         user_telegram_id=11,
         user_chat_id=22,
@@ -38,7 +37,8 @@ async def test_implements_interface(sqlite_db):
 
 async def test_add_assigns_uuid7_and_persists(repo):
     saved = await repo.add(_dto())
-    assert uuid.UUID(saved.id).version == 7
+    assert isinstance(saved.id, uuid.UUID)
+    assert saved.id.version == 7
     assert saved.created_at is not None
 
 
