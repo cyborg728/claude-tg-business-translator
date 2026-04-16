@@ -339,79 +339,90 @@ Policy going forward: every new migration is tested against **both**
 dialects in CI (live SQLite + live Postgres service; offline SQL diff
 against the postgres dialect as a hermetic lower bound in unit tests).
 
-#### 4.3 Data migration (one-shot, v2 SQLite → v3 Postgres)
+#### 4.3 Data migration (one-shot, v2 SQLite → v3 Postgres) — **Shipped**
 
 Assumption: production has a small dataset (hundreds of users, tens of
 business connections, bounded KV entries). A streaming bulk copy under
 a short maintenance window beats dual-write machinery.
 
-Procedure, codified as `scripts/migrate_sqlite_to_postgres.py`:
+Codified as `scripts/migrate_sqlite_to_postgres.py`; drive with
+`python -m scripts.migrate_sqlite_to_postgres --source sqlite:///data/bot.db
+--target postgresql+psycopg://bot:pw@host/bot`. What the script does:
 
-1. **Preflight.**
-   * Verify source `sqlite://…` and target `postgresql://…` URLs.
-   * `alembic upgrade head` against Postgres (empty schema → fully
-     migrated schema).
-   * Assert row counts on target are zero for every table — refuse to
-     run against a non-empty Postgres.
+* Validates the URL pair (rejects non-sqlite source, non-postgresql target).
+* Runs `alembic upgrade head` against the target so the dual-dialect
+  chain from Phase 4.2 lands `users` / `business_connections` /
+  `message_mappings` / `kv_store` with native UUID / TIMESTAMPTZ /
+  BOOLEAN + the `uq_kv_store_owner_key` constraint.
+* Preflights: refuses to run if any row-bearing table has rows. Safety
+  net against accidental re-runs clobbering live data.
+* Copies each table in FK-safe order with batched
+  `INSERT … ON CONFLICT DO NOTHING`. Rows are coerced en route:
+  `id` str→`uuid.UUID`, `is_enabled` int→bool, naive
+  `created_at`/`updated_at` → tz-aware UTC.
+* Verifies row counts per table post-copy; raises on mismatch.
+* Writes a JSON report to `--report` (default
+  `backups/migration-<utc-ts>.json`) with per-table
+  source/target/duration plus a credential-stripped URL pair.
 
-2. **Freeze writes.**
+What the script does **not** do — all operator steps in the runbook
+below:
+
+* Freeze writes / scale pods.
+* Snapshot the source (`sqlite3 src.db ".backup snapshot.db"`).
+* Flip `DATABASE_BACKEND=postgres` + restart workers.
+
+Tests (`tests/integration/test_migrate_script.py`, 2 unconditional + 4
+opt-in): URL validation rejects before any connection; live-PG happy
+path copies every row; spot-check asserts UUID/tz/bool coercion worked
+end-to-end on the target; non-empty target is refused; the CLI
+(`main([...])`) writes a well-formed JSON report with credentials
+redacted. Unit helpers (34 tests,
+`tests/unit/test_migrate_script.py`) cover the pure functions:
+URL validators, `coerce_row`, `_batched`, `verify_row_counts`, argparse,
+`_redact`, and `TABLES_IN_ORDER` drift against `Base.metadata`.
+
+**Cutover runbook** (operator-driven; keep alongside this section):
+
+1. **Freeze writes.**
    * Scale `bot` / `worker-tasks` / `worker-delivery` to 0 replicas.
    * Leave `webhook-receiver` up *if* Phase 2 already shipped: the
      receiver keeps returning 200 and updates pile up in RabbitMQ —
      zero user-visible downtime beyond the write freeze.
    * Otherwise: put Telegram into a 503 window by unsetting the webhook
-     or pointing it at a static page. Document in the runbook.
+     or pointing it at a static page.
 
-3. **Snapshot source.**
-   * `sqlite3 source.db ".backup snapshot.db"` (consistent hot copy).
+2. **Snapshot source.**
+   * `sqlite3 source.db ".backup snapshot.db"` (consistent hot copy;
+     `scripts/backup_sqlite.sh` wraps this).
    * Work off `snapshot.db` from here on; keep the original untouched
      until verified (rollback anchor).
 
-4. **Copy, per table, in FK-safe order.**
-   * Read in `BATCH_SIZE` (e.g. 1000) rows per table from SQLite with
-     the existing SQLAlchemy models.
-   * Transform at the row level:
-     * UUID strings → `uuid.UUID(s)`.
-     * ISO/epoch timestamps → `datetime` with UTC tz attached.
-     * `0/1` ints on boolean columns → `bool`.
-   * Bulk-insert into Postgres using `INSERT ... ON CONFLICT DO
-     NOTHING` so the script is resumable on crash.
-   * Tables are already small; if any ever grows (message mappings),
-     switch to `COPY` via `psycopg.copy`.
+3. **Run the migration script.** The script performs the URL check,
+   `alembic upgrade head`, empty-target preflight, per-table copy with
+   `ON CONFLICT DO NOTHING`, and row-count verification, then writes a
+   JSON report:
+   ```
+   python -m scripts.migrate_sqlite_to_postgres \
+       --source sqlite:///snapshot.db \
+       --target "$POSTGRES_DSN_SYNC"
+   ```
+   A non-zero exit code means verify / copy failed; inspect the report
+   and rerun after truncating the target.
 
-5. **Reset sequences / identity columns** — not applicable (UUID v7,
-   no autoincrement), but the script asserts no `serial`/`identity`
-   columns were silently introduced.
-
-6. **Verify.**
-   * Row count match per table.
-   * Spot-check: for each table, pick 10 random PKs from SQLite and
-     assert every column (after type normalization) matches on Postgres.
-   * Foreign-key integrity: `SELECT` self-join on Postgres to ensure no
-     orphaned rows (shouldn't happen if order was correct; belt &
-     braces).
-   * Write a migration report (JSON) to `backups/migration-<ts>.json`:
-     source row counts, target row counts, duration, any skipped rows.
-
-7. **Flip config.**
-   * `DATABASE_BACKEND=postgres`, `DATABASE_URL=postgres://…` in the
+4. **Flip config.**
+   * `DATABASE_BACKEND=postgres`, `POSTGRES_DSN=postgresql://…` in the
      ConfigMap/Secret.
    * `kubectl rollout restart deployment/worker-tasks
-     deployment/worker-delivery webhook-receiver`.
+     deployment/worker-delivery statefulset/update-consumer
+     deployment/webhook-receiver`.
    * Scale back to normal replica counts.
    * Queued updates from the maintenance window drain through.
 
-8. **Post-migration soak (24h).**
+5. **Post-migration soak (24h).**
    * Keep SQLite PVC + snapshot for 7 days.
    * Monitor: handler error rate, `delivery_queue` depth, Postgres
      connections, slow-query log.
-
-Tests for the migration script itself (integration):
-* Populate a SQLite DB with fixture data → run script → assert
-  row-for-row equivalence on testcontainer Postgres.
-* Crash mid-run → re-run → idempotent (thanks to `ON CONFLICT`).
-* Refuses to run against non-empty target.
-* Refuses to run if Alembic head on target doesn't match.
 
 #### 4.4 Rollback plan
 
@@ -548,7 +559,7 @@ before shard count is.
 - [x] Phase 4.1: `src/databases/postgres/` backend + factory registration + deps
 - [x] Phase 4.1 follow-up: native `uuid.UUID` in DTOs + Postgres `UUID(as_uuid=True)` + SQLite `UuidAsString36` TypeDecorator
 - [x] Phase 4.2: dual-dialect Alembic migration (`0002_postgres_parity`) + dialect-aware `env.py` + offline-SQL + opt-in live-Postgres tests
-- [ ] Phase 4.3: `scripts/migrate_sqlite_to_postgres.py` + integration tests (fixture copy, idempotency, refusals)
+- [x] Phase 4.3: `scripts/migrate_sqlite_to_postgres.py` + unit tests (coerce_row, validators, argparse, redact) + opt-in live-Postgres integration tests (fixture copy, non-empty refusal, JSON report via CLI)
 - [ ] Phase 4.4: reverse script + documented rollback runbook
 - [ ] Phase 4.5: `k8s/base/postgres.yaml` + `managed-postgres` overlay + `backup-postgres` CronJob; drop `tg-bot-data` PVC mount from workers
 - [ ] Phase 5: HPAs + KEDA + Prometheus metrics + dashboard

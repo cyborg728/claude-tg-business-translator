@@ -6,7 +6,7 @@ Postgres + Alembic** and **Fluent** for i18n. Every piece is swappable —
 all repositories sit behind interfaces under `src/databases/`, and
 `DATABASE_BACKEND={sqlite,postgres}` picks the concrete implementation.
 
-> **v3 status — Phase 4.2 shipped.** v3 inherits the v2 code and adds
+> **v3 status — Phase 4.3 shipped.** v3 inherits the v2 code and adds
 > horizontal scalability: the webhook receiver is split out from the PTB
 > handler process, updates are sharded by `chat_id` into RabbitMQ, and
 > delivery is token-bucketed against Telegram's global / per-chat rate
@@ -22,6 +22,10 @@ all repositories sit behind interfaces under `src/databases/`, and
 > DTOs carry `id: uuid.UUID`. **Phase 4.2** — dual-dialect Alembic
 > chain (`0002_postgres_parity`): one `alembic upgrade head` works
 > against either backend; `env.py` picks the dialect-native `Base`.
+> **Phase 4.3** — `scripts/migrate_sqlite_to_postgres.py`: one-shot
+> data copy with preflight (refuses non-empty targets), batched
+> `INSERT ... ON CONFLICT DO NOTHING`, row-count verification, and a
+> JSON migration report.
 > See [`MIGRATION_V2_TO_V3.md`](./MIGRATION_V2_TO_V3.md) for the
 > step-by-step plan and [🎯 v3 — horizontal scaling](#-v3--horizontal-scaling)
 > below for the target architecture.
@@ -93,9 +97,13 @@ Highlights:
   dual-dialect chain — `0002_postgres_parity` is a no-op on SQLite and
   builds the Postgres-native schema (UUID / TIMESTAMPTZ / BOOLEAN +
   `uq_kv_store_owner_key`) on Postgres, so one `alembic upgrade head`
-  works against either backend. Flip with `DATABASE_BACKEND=postgres`
-  + `POSTGRES_DSN=postgresql://…`. Phases 4.3–4.5 add a
-  `scripts/migrate_sqlite_to_postgres.py` one-shot and a k8s Postgres
+  works against either backend. Phase 4.3 adds
+  `scripts/migrate_sqlite_to_postgres.py` — a one-shot data copy that
+  preflights (refuses non-empty targets), batches
+  `INSERT ... ON CONFLICT DO NOTHING`, coerces UUID/tz/bool types, and
+  writes a JSON migration report. Flip with
+  `DATABASE_BACKEND=postgres` + `POSTGRES_DSN=postgresql://…`. Phases
+  4.4–4.5 add the reverse script / rollback runbook and a k8s Postgres
   overlay.
 * **k8s**: new overlay `k8s/overlays/scaled` with `webhook-receiver`
   Deployment + Service + Ingress, HPAs (CPU and KEDA/RabbitMQ queue
@@ -153,7 +161,8 @@ Non-goals for v3:
 ├── .env.example                  # Copy to .env
 ├── scripts/
 │   ├── backup_sqlite.sh
-│   └── backup_rabbitmq.sh
+│   ├── backup_rabbitmq.sh
+│   └── migrate_sqlite_to_postgres.py  # Phase 4.3 v2→v3 data copy
 ├── k8s/
 │   ├── base/                     # Namespace, ConfigMap, Secret, PVCs, Redis, RabbitMQ,
 │   │                             # worker deployments, migrate Job, backup CronJobs
@@ -508,6 +517,7 @@ The runner uses `pyproject.toml [tool.pytest.ini_options]`:
 | Session rollback              | `tests/integration/test_session_rollback.py`                  | exception inside session must roll back             |
 | Redis cache                   | `tests/integration/test_redis_cache.py`                       | save/read, wait flag, TTL semantics (via fakeredis) |
 | Alembic migrations            | `tests/integration/test_alembic_migrations.py`                | SQLite live + Postgres offline-SQL (UUID/TIMESTAMPTZ) + opt-in live PG |
+| SQLite→Postgres migrate       | `tests/unit/test_migrate_script.py` + `tests/integration/test_migrate_script.py` | `coerce_row`, URL validators, `_batched`, `_redact`, argparse; URL rejection + opt-in live PG copy/refusal |
 | Delivery facade               | `tests/unit/test_delivery_facade.py`                          | `send_text` / `send_photo` / `edit_text` payloads   |
 | Delivery task                 | `tests/integration/test_delivery_task.py`                     | routing, rate-limit, 429 → Retry, 5xx, DLQ, metrics |
 | Update dedup                  | `tests/integration/test_idempotency.py`                       | first-call wins, TTL, non-destructive `has_seen`    |
