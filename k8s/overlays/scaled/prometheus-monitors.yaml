@@ -1,0 +1,42 @@
+# Prometheus Operator scrape targets.
+# Requires the Prometheus Operator CRDs (ServiceMonitor, PodMonitor).
+# If running bare Prometheus, use static scrape configs instead.
+---
+# ServiceMonitor for webhook-receiver: scrapes /metrics on port 8080.
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: webhook-receiver
+  labels:
+    app: webhook-receiver
+spec:
+  selector:
+    matchLabels: { app: webhook-receiver }
+  endpoints:
+    - port: http
+      path: /metrics
+      interval: 15s
+---
+# PodMonitor for Celery workers.
+# Workers don't serve HTTP by default — prometheus_client's built-in
+# HTTP server is started on port 9090 when PROMETHEUS_MULTIPROC_DIR is
+# set (see the note in the deployment env below). For a simpler
+# approach, skip this and rely on push-gateway or the receiver's
+# /metrics which aggregates all in-process counters in the receiver.
+#
+# Alternatively, run a prometheus_client start_http_server(9090) in the
+# Celery worker_init signal. This PodMonitor is kept here as a ready
+# template for when that's wired up.
+apiVersion: monitoring.coreos.com/v1
+kind: PodMonitor
+metadata:
+  name: celery-workers
+  labels:
+    app.kubernetes.io/part-of: tg-business-bot
+spec:
+  selector:
+    matchLabels: { app.kubernetes.io/part-of: tg-business-bot }
+  podMetricsEndpoints:
+    - port: metrics
+      path: /metrics
+      interval: 30s

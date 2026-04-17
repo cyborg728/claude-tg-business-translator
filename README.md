@@ -6,7 +6,7 @@ Postgres + Alembic** and **Fluent** for i18n. Every piece is swappable —
 all repositories sit behind interfaces under `src/databases/`, and
 `DATABASE_BACKEND={sqlite,postgres}` picks the concrete implementation.
 
-> **v3 status — Phase 4.5 shipped.** v3 inherits the v2 code and adds
+> **v3 status — Phase 5 shipped.** v3 inherits the v2 code and adds
 > horizontal scalability: the webhook receiver is split out from the PTB
 > handler process, updates are sharded by `chat_id` into RabbitMQ, and
 > delivery is token-bucketed against Telegram's global / per-chat rate
@@ -27,13 +27,13 @@ all repositories sit behind interfaces under `src/databases/`, and
 > `INSERT ... ON CONFLICT DO NOTHING`, row-count verification, and a
 > JSON migration report. **Phase 4.4** —
 > `scripts/migrate_postgres_to_sqlite.py`: symmetric reverse copier
-> for tier-2 rollback, with a three-tier runbook (config flip <2 min
-> / reverse copy <30 min / nuclear snapshot restore) in
-> `MIGRATION_V2_TO_V3.md` §4.4. **Phase 4.5** — k8s Postgres
-> manifests: `postgres.yaml` (StatefulSet + Service + PVC),
-> `backup-postgres` CronJob (`pg_dump -Fc`, suspended until cutover),
-> `managed-postgres` overlay for RDS/Cloud SQL, workers decoupled
-> from the SQLite PVC.
+> for tier-2 rollback, with a three-tier runbook. **Phase 4.5** —
+> k8s Postgres manifests, `backup-postgres` CronJob,
+> `managed-postgres` overlay, workers decoupled from the SQLite PVC.
+> **Phase 5** — `/metrics` endpoint (Prometheus), KEDA ScaledObjects
+> for `worker-delivery` + `worker-tasks` on RabbitMQ queue depth,
+> ServiceMonitor + PodMonitor, Grafana dashboard JSON, receiver +
+> handler instrumentation.
 > See [`MIGRATION_V2_TO_V3.md`](./MIGRATION_V2_TO_V3.md) for the
 > step-by-step plan and [🎯 v3 — horizontal scaling](#-v3--horizontal-scaling)
 > below for the target architecture.
@@ -148,7 +148,7 @@ Non-goals for v3:
 | Task queue (`tasks_queue`)             | Celery worker processes slow work                                 |
 | Delivery queue (`delivery_queue`)      | Celery worker with per-sec / per-chat rate limits in Redis        |
 | **Delivery DLQ (`delivery_dlq`)**      | Terminal failures published raw via Kombu; no consumer (Phase 1)  |
-| **Prometheus counters**                | In-process via `prometheus-client`; HTTP exposition in Phase 5    |
+| **Prometheus metrics**                 | `/metrics` endpoint on receiver; counters + histograms via `prometheus-client` |
 | Business accounts (`business_message`) | `BusinessConnectionHandler` + dedicated `MessageHandler` filter   |
 | Error handling                         | Global `error_handler` + catch-all `/unknown` handler             |
 | UUID v7 primary keys                   | `uuid_utils.uuid7` via `src/utils/ids.py`                         |
@@ -541,6 +541,8 @@ The runner uses `pyproject.toml [tool.pytest.ini_options]`:
 | Delivery task                 | `tests/integration/test_delivery_task.py`                     | routing, rate-limit, 429 → Retry, 5xx, DLQ, metrics |
 | Update dedup                  | `tests/integration/test_idempotency.py`                       | first-call wins, TTL, non-destructive `has_seen`    |
 | Dedup PTB wiring              | `tests/integration/test_dedup_handler.py`                     | `ApplicationHandlerStop` on duplicate `update_id`   |
+| Prometheus metrics            | `tests/unit/test_metrics.py`                                  | metric types, label names, custom histogram buckets |
+| Receiver /metrics + counters  | `tests/integration/test_receiver_metrics.py`                  | `/metrics` format, counter increments (published/dedup/error), histogram observation |
 
 ### What's NOT tested yet (lands with the first real feature)
 

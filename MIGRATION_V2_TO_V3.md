@@ -282,8 +282,7 @@ the backend swap and the data copy are independently reversible.
   unchanged), CREATE TABLE DDL asserts native `UUID` / `TIMESTAMPTZ` /
   `BOOLEAN` types, factory dispatch (sqlite/postgres without
   connecting, unknown backend rejected by pydantic `Literal`).
-* Phases 4.1–4.5 all shipped; remaining: Phase 5 (autoscaling +
-  observability), Phase 6 (cutover + cleanup).
+* Phases 1–5 all shipped; remaining: Phase 6 (cutover + cleanup).
 * **Follow-up — done (post-4.1):** Postgres primary key is now native
   `UUID(as_uuid=True)` and every DTO exposes `id: uuid.UUID | None`.
   The SQLite backend reuses the existing `CHAR(36)` storage via a
@@ -545,28 +544,73 @@ Postgres side for manual reconciliation if feasible.
 Deployable outcome: `worker-tasks` can run any replica count; SQLite
 remains usable for local dev (`DATABASE_BACKEND=sqlite` in `.env`).
 
-### Phase 5 — Autoscaling & observability
+### Phase 5 — Autoscaling & observability — **Shipped**
 
 Goal: make the system self-adjust and visible.
 
-* HPAs:
-  * `webhook-receiver`: CPU + RPS (Prometheus adapter, or just CPU).
-  * `worker-tasks`: KEDA `rabbitmq` scaler on sum(queue depth across
-    shards). Min = shard count (ordering constraint), max = shard count
-    × K — see note below.
-  * `worker-delivery`: fixed or KEDA on `delivery_queue` depth, but
-    bounded by Telegram's global rate.
-* Prometheus metrics (receiver publish rate, dedup hits, shard queue
-  depth, handler latency, deliver 429 rate).
-* Optional: Grafana dashboard JSON checked into `k8s/base/`.
+**Prometheus metrics** — all shipped, HTTP `/metrics` wired:
 
-Ordering note: if `worker-tasks` scales above N (shard count), the extra
-replicas can't consume ordered shards without breaking the one-consumer
-rule. Two options:
-(a) keep `replicas == shards` and raise `UPDATES_SHARDS` to scale (needs
-rebalance — see §5);
-(b) allow extra replicas to consume *non-ordered* queues (e.g. chat-less
-updates: `callback_query` without `message.chat`).
+* `src/tasks/metrics.py` extended with three new instruments:
+  * `receiver_requests_total{outcome}` — counter: `published`, `dedup`,
+    `publish_error`.
+  * `receiver_publish_duration_seconds` — histogram with sub-ms
+    buckets (0.001–1.0s) for RabbitMQ publish latency.
+  * `handler_duration_seconds{shard}` — histogram (0.05–30s) for
+    `handle_update` Celery task execution time, labelled by shard
+    queue name (from `delivery_info.routing_key`).
+* `src/receiver/app.py`: `GET /metrics` endpoint serves the default
+  `prometheus_client` registry via `generate_latest()`. The receiver
+  process holds all receiver + dedup counters; worker-side counters
+  (delivery, handler) live in the Celery worker processes.
+* `src/tasks/processing.py`: `handle_update` instrumented with
+  `handler_duration_seconds`.
+
+**HPAs / KEDA ScaledObjects** — `k8s/overlays/scaled/`:
+
+* `webhook-receiver-hpa.yaml` (existing, CPU-based, 2–10 replicas).
+* `keda-scaled-objects.yaml` (new):
+  * `TriggerAuthentication` `rabbitmq-trigger-auth` — wired to
+    `RABBITMQ_HTTP_URL` from ConfigMap.
+  * `ScaledObject` `worker-delivery` — RabbitMQ `delivery_queue`
+    depth ≥ 50, min 1, max 3 (upper bound set by the Redis
+    token-bucket rate-limiter, not pod count).
+  * `ScaledObject` `worker-tasks` — RabbitMQ `tasks_queue` depth
+    ≥ 20, min 1, max 8.
+* `update-consumer` StatefulSet is NOT auto-scaled: replica count =
+  `UPDATES_SHARDS` (1:1 pod-to-shard for ordering). Scaling it
+  means re-sharding (see §5 re-sharding runbook).
+
+**Prometheus Operator resources** — `prometheus-monitors.yaml` (new):
+
+* `ServiceMonitor` `webhook-receiver` — scrapes `/metrics` on port
+  `http` every 15s.
+* `PodMonitor` `celery-workers` — template for when Celery workers
+  expose a metrics port (e.g. via `start_http_server(9090)` in the
+  `worker_init` signal).
+
+**Grafana dashboard** — `k8s/base/grafana-dashboard.json` (new):
+
+Six-panel dashboard: delivery rates (sent/throttled/error), retries +
+DLQ, dedup hit/miss, receiver requests by outcome, receiver publish
+latency (p50/p90/p99), handler dispatch latency by shard (p50/p99).
+All panels use 1-minute rate windows and `opm` or `s` units.
+
+**ConfigMap** — `RABBITMQ_HTTP_URL` added for KEDA RabbitMQ scaler.
+
+**Tests** — `tests/unit/test_metrics.py` (6 tests): metric types,
+label names, custom histogram buckets.
+`tests/integration/test_receiver_metrics.py` (6 tests): `/metrics`
+endpoint format, `receiver_requests_total` increments for
+published/dedup/publish_error, `receiver_publish_duration_seconds`
+observes on publish, `handler_duration_seconds` declaration.
+
+Ordering note (unchanged): if `worker-tasks` scales above N (shard
+count), the extra replicas can't consume ordered shards without
+breaking the one-consumer rule. Two options:
+(a) keep `replicas == shards` and raise `UPDATES_SHARDS` to scale
+(needs rebalance — see §5);
+(b) allow extra replicas to consume *non-ordered* queues (e.g.
+chat-less updates: `callback_query` without `message.chat`).
 
 ### Phase 6 — Cutover & cleanup
 
@@ -638,5 +682,5 @@ before shard count is.
 - [x] Phase 4.3: `scripts/migrate_sqlite_to_postgres.py` + unit tests (coerce_row, validators, argparse, redact) + opt-in live-Postgres integration tests (fixture copy, non-empty refusal, JSON report via CLI)
 - [x] Phase 4.4: reverse script + documented rollback runbook
 - [x] Phase 4.5: `k8s/base/postgres.yaml` + `managed-postgres` overlay + `backup-postgres` CronJob; drop `tg-bot-data` PVC mount from workers
-- [ ] Phase 5: HPAs + KEDA + Prometheus metrics + dashboard
+- [x] Phase 5: HPAs + KEDA + Prometheus metrics + dashboard
 - [ ] Phase 6: cutover, cleanup, README consolidation

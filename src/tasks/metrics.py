@@ -11,7 +11,7 @@ counters, lowercase, plural.
 
 from __future__ import annotations
 
-from prometheus_client import Counter
+from prometheus_client import Counter, Histogram
 
 # ── Delivery (``src.tasks.delivery.deliver``) ────────────────────────────────
 deliver_sent_total = Counter(
@@ -51,6 +51,27 @@ dedup_miss_total = Counter(
 )
 
 
+# ── Webhook receiver (``src.receiver.app``) ─────────────────────────────────
+receiver_requests_total = Counter(
+    "receiver_requests_total",
+    "Inbound webhook requests by outcome.",
+    labelnames=("outcome",),
+)
+receiver_publish_duration_seconds = Histogram(
+    "receiver_publish_duration_seconds",
+    "Time spent publishing an update to RabbitMQ.",
+    buckets=(0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0),
+)
+
+# ── Handler latency (``src.tasks.handle_update``) ───────────────────────────
+handler_duration_seconds = Histogram(
+    "handler_duration_seconds",
+    "Wall-clock time of handle_update Celery task execution.",
+    labelnames=("shard",),
+    buckets=(0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0, 30.0),
+)
+
+
 __all__ = [
     "dedup_hit_total",
     "dedup_miss_total",
@@ -59,4 +80,7 @@ __all__ = [
     "deliver_sent_total",
     "deliver_server_error_total",
     "deliver_throttled_total",
+    "handler_duration_seconds",
+    "receiver_publish_duration_seconds",
+    "receiver_requests_total",
 ]

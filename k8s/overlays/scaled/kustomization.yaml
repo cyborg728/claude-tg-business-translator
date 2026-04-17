@@ -30,6 +30,8 @@ resources:
   - webhook-receiver-ingress.yaml
   - webhook-receiver-hpa.yaml
   - update-consumer.yaml
+  - keda-scaled-objects.yaml
+  - prometheus-monitors.yaml
 
 configMapGenerator:
   - name: tg-bot-config

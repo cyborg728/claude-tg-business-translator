@@ -22,6 +22,7 @@ data:
 
   # ── RabbitMQ / Celery ───────────────────────────────────────────────────────
   RABBITMQ_URL: "amqp://guest:guest@rabbitmq:5672//"
+  RABBITMQ_HTTP_URL: "http://guest:guest@rabbitmq:15672"
   QUEUE_TASKS: "tasks_queue"
   QUEUE_DELIVERY: "delivery_queue"
 

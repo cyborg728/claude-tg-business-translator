@@ -21,10 +21,15 @@ import logging
 from typing import Any
 
 from fastapi import FastAPI, Header, HTTPException, Request, Response
+from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 from redis.asyncio import Redis
 
 from src.cache.idempotency import claim_update
 from src.config import Settings
+from src.tasks.metrics import (
+    receiver_publish_duration_seconds,
+    receiver_requests_total,
+)
 
 from .chat_id import extract_chat_id
 from .publisher import PublisherError, UpdatePublisher
@@ -80,20 +85,30 @@ def create_app(
         )
         if not first_time:
             logger.info("Duplicate update_id=%s dropped", update_id)
-            # 200, not 4xx — we've "accepted" it (we just know it).
+            receiver_requests_total.labels(outcome="dedup").inc()
             return Response(status_code=200)
 
         # 4. Publish. chat_id goes into the message headers so Phase 3
         #    can route on it without re-parsing the body.
         chat_id = extract_chat_id(update)
         try:
-            await publisher.publish(update, chat_id=chat_id)
+            with receiver_publish_duration_seconds.time():
+                await publisher.publish(update, chat_id=chat_id)
         except PublisherError as exc:
             logger.error("Publish failed for update_id=%s: %s", update_id, exc)
-            # Telegram will retry — 503 is the polite "try again" signal.
+            receiver_requests_total.labels(outcome="publish_error").inc()
             raise HTTPException(status_code=503, detail="broker unavailable") from exc
 
+        receiver_requests_total.labels(outcome="published").inc()
         return Response(status_code=200)
+
+    @app.get("/metrics")
+    async def metrics() -> Response:
+        """Prometheus scrape endpoint — exposes all in-process counters."""
+        return Response(
+            content=generate_latest(),
+            media_type=CONTENT_TYPE_LATEST,
+        )
 
     @app.get("/healthz")
     async def healthz() -> dict[str, str]:

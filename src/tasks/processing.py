@@ -17,6 +17,7 @@ from src.config import get_settings
 
 from .celery_app import celery_app
 from .delivery import send_text
+from .metrics import handler_duration_seconds
 
 logger = logging.getLogger(__name__)
 
@@ -79,4 +80,8 @@ def handle_update(self, raw_update: dict) -> None:
 
     update_id = raw_update.get("update_id")
     logger.debug("[processing.handle_update] update_id=%s", update_id)
-    dispatch_update(raw_update)
+
+    delivery_info = getattr(self.request, "delivery_info", None) or {}
+    shard = delivery_info.get("routing_key", "unknown")
+    with handler_duration_seconds.labels(shard=shard).time():
+        dispatch_update(raw_update)
