@@ -1,0 +1,87 @@
+# Managed Postgres overlay — use instead of the self-hosted StatefulSet
+# when the database is provided by a managed service (RDS, Cloud SQL,
+# Neon, etc.). This overlay:
+#   1. Strips the in-cluster Postgres StatefulSet, Service, and PVC.
+#   2. Patches the ConfigMap to switch DATABASE_BACKEND=postgres and
+#      point POSTGRES_HOST / POSTGRES_PORT at the managed endpoint.
+#   3. Unsuspends backup-postgres and suspends backup-sqlite.
+#
+# Operator must still fill in the Secret with real credentials and
+# update POSTGRES_HOST below to the actual managed endpoint.
+#
+# Usage: kustomize build k8s/overlays/managed-postgres | kubectl apply -f -
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - ../../base
+
+patches:
+  # Remove the self-hosted Postgres StatefulSet.
+  - target:
+      kind: StatefulSet
+      name: postgres
+    patch: |
+      $patch: delete
+      apiVersion: apps/v1
+      kind: StatefulSet
+      metadata:
+        name: postgres
+
+  # Remove the self-hosted Postgres Service.
+  - target:
+      kind: Service
+      name: postgres
+    patch: |
+      $patch: delete
+      apiVersion: v1
+      kind: Service
+      metadata:
+        name: postgres
+
+  # Remove the self-hosted Postgres PVC.
+  - target:
+      kind: PersistentVolumeClaim
+      name: postgres-data
+    patch: |
+      $patch: delete
+      apiVersion: v1
+      kind: PersistentVolumeClaim
+      metadata:
+        name: postgres-data
+
+  # Switch to Postgres backend and point at the managed endpoint.
+  - target:
+      kind: ConfigMap
+      name: tg-bot-config
+    patch: |
+      apiVersion: v1
+      kind: ConfigMap
+      metadata:
+        name: tg-bot-config
+      data:
+        DATABASE_BACKEND: "postgres"
+        POSTGRES_HOST: "your-managed-instance.rds.amazonaws.com"
+        POSTGRES_PORT: "5432"
+
+  # Unsuspend backup-postgres (pg_dump uses POSTGRES_HOST from ConfigMap).
+  - target:
+      kind: CronJob
+      name: backup-postgres
+    patch: |
+      - op: replace
+        path: /spec/suspend
+        value: false
+    options:
+      patchType: JSONPatch
+
+  # Suspend backup-sqlite (no longer relevant on managed Postgres).
+  - target:
+      kind: CronJob
+      name: backup-sqlite
+    patch: |
+      - op: add
+        path: /spec/suspend
+        value: true
+    options:
+      patchType: JSONPatch

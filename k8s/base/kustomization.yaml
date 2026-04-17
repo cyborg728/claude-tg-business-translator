@@ -10,6 +10,7 @@ resources:
   - pvc.yaml
   - redis.yaml
   - rabbitmq.yaml
+  - postgres.yaml
   - worker-tasks.yaml
   - worker-delivery.yaml
   - migrate-job.yaml

@@ -26,12 +26,6 @@ spec:
           envFrom:
             - configMapRef: { name: tg-bot-config }
             - secretRef: { name: tg-bot-secrets }
-          volumeMounts:
-            - { name: data, mountPath: /app/data }
           resources:
             requests: { cpu: 100m, memory: 192Mi }
             limits: { cpu: 1, memory: 512Mi }
-      volumes:
-        - name: data
-          persistentVolumeClaim:
-            claimName: tg-bot-data

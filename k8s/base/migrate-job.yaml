@@ -1,4 +1,7 @@
 # One-shot Alembic upgrade. Re-create to re-run.
+# Works for both SQLite and Postgres — the dual-dialect Alembic chain
+# (0001 for SQLite, 0002 for Postgres) is selected by DATABASE_BACKEND.
+# For Postgres cutover: ensure this job runs BEFORE scaling up workers.
 apiVersion: batch/v1
 kind: Job
 metadata:
@@ -16,9 +19,3 @@ spec:
           envFrom:
             - configMapRef: { name: tg-bot-config }
             - secretRef: { name: tg-bot-secrets }
-          volumeMounts:
-            - { name: data, mountPath: /app/data }
-      volumes:
-        - name: data
-          persistentVolumeClaim:
-            claimName: tg-bot-data

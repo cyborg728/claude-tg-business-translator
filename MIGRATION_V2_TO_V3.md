@@ -282,8 +282,8 @@ the backend swap and the data copy are independently reversible.
   unchanged), CREATE TABLE DDL asserts native `UUID` / `TIMESTAMPTZ` /
   `BOOLEAN` types, factory dispatch (sqlite/postgres without
   connecting, unknown backend rejected by pydantic `Literal`).
-* Still remaining for 4.5+: k8s overlay for Postgres, backup-postgres
-  CronJob, cutover runbook.
+* Phases 4.1–4.5 all shipped; remaining: Phase 5 (autoscaling +
+  observability), Phase 6 (cutover + cleanup).
 * **Follow-up — done (post-4.1):** Postgres primary key is now native
   `UUID(as_uuid=True)` and every DTO exposes `id: uuid.UUID | None`.
   The SQLite backend reuses the existing `CHAR(36)` storage via a
@@ -508,26 +508,39 @@ Postgres side for manual reconciliation if feasible.
 * Rename `backup-sqlite` CronJob → `backup-postgres` (`pg_dump -Fc`,
   gzip, same PVC + retention window).
 
-#### 4.5 k8s & ops changes
+#### 4.5 k8s & ops changes — **Shipped**
 
-* New `k8s/base/postgres.yaml`:
+* `k8s/base/postgres.yaml` (new):
+  * `PersistentVolumeClaim` `postgres-data` (5Gi RWO).
   * `StatefulSet` with one replica for the self-hosted path (HA is out
-    of scope — single Postgres is fine for this bot's load). PVC for
-    data, resource requests modest (256Mi–1Gi, 100m–500m CPU).
+    of scope — single Postgres is fine for this bot's load).
+    `postgres:16-alpine`, PGDATA on the PVC, readiness + liveness
+    probes via `pg_isready`. Resource requests 100m/256Mi, limits
+    500m/1Gi.
   * `Service` (ClusterIP) on `5432`.
-  * Secret-driven credentials (`POSTGRES_USER`, `POSTGRES_PASSWORD`,
-    `POSTGRES_DB`).
-* `k8s/base/kustomization.yaml`: include the new file.
-* Overlay `k8s/overlays/managed-postgres/` (optional): strips the
-  StatefulSet + Service, relies on `DATABASE_URL` from a Secret that
-  points to a managed provider.
-* `k8s/base/backup-cronjobs.yaml`: add `backup-postgres` (`pg_dump
-  -Fc`, daily 02:45 UTC, 30-day retention). Keep `backup-sqlite`
-  disabled or removed post-soak.
-* `worker-tasks` / `worker-delivery`: drop the `tg-bot-data` PVC
-  mount; they no longer touch the filesystem DB.
-* `migrate-job.yaml`: no change, but ensure it runs against the new
-  URL before workers start.
+  * All credentials from `tg-bot-secrets`: `POSTGRES_USER`,
+    `POSTGRES_PASSWORD`, `POSTGRES_DB`.
+* `k8s/base/kustomization.yaml`: includes `postgres.yaml`.
+* `k8s/base/configmap.yaml`: adds `POSTGRES_HOST=postgres`,
+  `POSTGRES_PORT=5432` (matches in-cluster Service).
+* `k8s/base/secret.yaml.example`: adds `POSTGRES_USER`,
+  `POSTGRES_PASSWORD`, `POSTGRES_DB` placeholders.
+* `k8s/base/backup-cronjobs.yaml`: adds `backup-postgres` CronJob
+  (`pg_dump -Fc`, daily 02:45 UTC, 30-day retention, `suspend: true`
+  until cutover). Uses `POSTGRES_HOST`/`POSTGRES_PORT` from ConfigMap
+  so it works for both self-hosted and managed Postgres.
+* `k8s/overlays/managed-postgres/` (new): strips the in-cluster
+  StatefulSet + Service + PVC, patches ConfigMap to
+  `DATABASE_BACKEND=postgres` with a managed endpoint in
+  `POSTGRES_HOST`, unsuspends `backup-postgres`, suspends
+  `backup-sqlite`.
+* `k8s/base/worker-tasks.yaml`: dropped `tg-bot-data` PVC mount —
+  workers access the DB over the network via Postgres.
+* `k8s/overlays/scaled/update-consumer.yaml`: dropped the SQLite PVC
+  mount and the associated comment.
+* `k8s/base/migrate-job.yaml`: simplified to env-only (no PVC mount);
+  `alembic upgrade head` works for both backends via the dual-dialect
+  chain.
 
 Deployable outcome: `worker-tasks` can run any replica count; SQLite
 remains usable for local dev (`DATABASE_BACKEND=sqlite` in `.env`).
@@ -624,6 +637,6 @@ before shard count is.
 - [x] Phase 4.2: dual-dialect Alembic migration (`0002_postgres_parity`) + dialect-aware `env.py` + offline-SQL + opt-in live-Postgres tests
 - [x] Phase 4.3: `scripts/migrate_sqlite_to_postgres.py` + unit tests (coerce_row, validators, argparse, redact) + opt-in live-Postgres integration tests (fixture copy, non-empty refusal, JSON report via CLI)
 - [x] Phase 4.4: reverse script + documented rollback runbook
-- [ ] Phase 4.5: `k8s/base/postgres.yaml` + `managed-postgres` overlay + `backup-postgres` CronJob; drop `tg-bot-data` PVC mount from workers
+- [x] Phase 4.5: `k8s/base/postgres.yaml` + `managed-postgres` overlay + `backup-postgres` CronJob; drop `tg-bot-data` PVC mount from workers
 - [ ] Phase 5: HPAs + KEDA + Prometheus metrics + dashboard
 - [ ] Phase 6: cutover, cleanup, README consolidation

@@ -10,8 +10,15 @@ data:
   DEFAULT_LOCALE: "en"
 
   # ── Database ────────────────────────────────────────────────────────────────
+  # Flip to "postgres" after cutover (Phase 4.3 in MIGRATION_V2_TO_V3.md).
   DATABASE_BACKEND: "sqlite"
   DATABASE_PATH: "/app/data/bot.db"
+  # POSTGRES_DSN is built from the Secret values at runtime by the app's
+  # Settings class. The sync DSN for Alembic / migration scripts is derived
+  # automatically (asyncpg→psycopg). The host below matches the in-cluster
+  # Service name from postgres.yaml; override in managed-postgres overlay.
+  POSTGRES_HOST: "postgres"
+  POSTGRES_PORT: "5432"
 
   # ── RabbitMQ / Celery ───────────────────────────────────────────────────────
   RABBITMQ_URL: "amqp://guest:guest@rabbitmq:5672//"

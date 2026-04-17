@@ -6,7 +6,7 @@ Postgres + Alembic** and **Fluent** for i18n. Every piece is swappable —
 all repositories sit behind interfaces under `src/databases/`, and
 `DATABASE_BACKEND={sqlite,postgres}` picks the concrete implementation.
 
-> **v3 status — Phase 4.4 shipped.** v3 inherits the v2 code and adds
+> **v3 status — Phase 4.5 shipped.** v3 inherits the v2 code and adds
 > horizontal scalability: the webhook receiver is split out from the PTB
 > handler process, updates are sharded by `chat_id` into RabbitMQ, and
 > delivery is token-bucketed against Telegram's global / per-chat rate
@@ -29,7 +29,11 @@ all repositories sit behind interfaces under `src/databases/`, and
 > `scripts/migrate_postgres_to_sqlite.py`: symmetric reverse copier
 > for tier-2 rollback, with a three-tier runbook (config flip <2 min
 > / reverse copy <30 min / nuclear snapshot restore) in
-> `MIGRATION_V2_TO_V3.md` §4.4.
+> `MIGRATION_V2_TO_V3.md` §4.4. **Phase 4.5** — k8s Postgres
+> manifests: `postgres.yaml` (StatefulSet + Service + PVC),
+> `backup-postgres` CronJob (`pg_dump -Fc`, suspended until cutover),
+> `managed-postgres` overlay for RDS/Cloud SQL, workers decoupled
+> from the SQLite PVC.
 > See [`MIGRATION_V2_TO_V3.md`](./MIGRATION_V2_TO_V3.md) for the
 > step-by-step plan and [🎯 v3 — horizontal scaling](#-v3--horizontal-scaling)
 > below for the target architecture.
@@ -110,7 +114,12 @@ Highlights:
   4.4 adds `scripts/migrate_postgres_to_sqlite.py`: the symmetric
   reverse copier used for tier-2 rollback (§4.4 in the migration
   doc — config flip / reverse copy / nuclear snapshot restore).
-  Phase 4.5 adds the k8s Postgres overlay.
+  Phase 4.5 ships the k8s Postgres manifests: `postgres.yaml`
+  (StatefulSet + Service + PVC), a `backup-postgres` CronJob
+  (`pg_dump -Fc`, suspended until cutover), a `managed-postgres`
+  overlay that strips the in-cluster Postgres and points at a managed
+  endpoint, and drops the SQLite PVC mount from all workers so
+  `worker-tasks` can scale to any replica count.
 * **k8s**: new overlay `k8s/overlays/scaled` with `webhook-receiver`
   Deployment + Service + Ingress, HPAs (CPU and KEDA/RabbitMQ queue
   depth), and the existing worker Deployments reused.
@@ -144,8 +153,8 @@ Non-goals for v3:
 | Error handling                         | Global `error_handler` + catch-all `/unknown` handler             |
 | UUID v7 primary keys                   | `uuid_utils.uuid7` via `src/utils/ids.py`                         |
 | Alembic migrations                     | Dual-dialect: `0001_initial_schema.py` (SQLite) + `0002_postgres_parity.py` (Postgres) |
-| k3s manifests                          | Kustomize `base/` + `overlays/polling` + `overlays/webhook`       |
-| DB & RabbitMQ backups                  | CronJobs to a dedicated PVC; local shell equivalents in `scripts` |
+| k3s manifests                          | Kustomize `base/` + `overlays/{polling,webhook,scaled,managed-postgres}` |
+| DB & RabbitMQ backups                  | CronJobs (SQLite + Postgres + RabbitMQ) to a dedicated PVC; local shell equivalents in `scripts` |
 | Test suite                             | `pytest` — unit + SQLite + fakeredis + Alembic (see "Tests")      |
 
 ---
@@ -172,11 +181,13 @@ Non-goals for v3:
 │   └── migrate_postgres_to_sqlite.py  # Phase 4.4 tier-2 rollback copier
 ├── k8s/
 │   ├── base/                     # Namespace, ConfigMap, Secret, PVCs, Redis, RabbitMQ,
-│   │                             # worker deployments, migrate Job, backup CronJobs
+│   │                             # Postgres StatefulSet+Service, worker deployments,
+│   │                             # migrate Job, backup CronJobs (SQLite+Postgres+RMQ)
 │   └── overlays/
 │       ├── polling/              # MODE=polling — single-replica bot Deployment
 │       ├── webhook/              # MODE=webhook — bot Deployment + Service + Ingress
-│       └── scaled/               # MODE=receiver + consistent-hash shards (Phase 2+3)
+│       ├── scaled/               # MODE=receiver + consistent-hash shards (Phase 2+3)
+│       └── managed-postgres/     # Strips self-hosted PG; points at RDS / Cloud SQL
 └── src/
     ├── config/settings.py        # Pydantic Settings (single source of truth)
     ├── bot/

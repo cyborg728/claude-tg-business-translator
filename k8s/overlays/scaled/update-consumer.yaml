@@ -47,17 +47,9 @@ spec:
           envFrom:
             - configMapRef: { name: tg-bot-config }
             - secretRef: { name: tg-bot-secrets }
-          volumeMounts:
-            - { name: data, mountPath: /app/data }
           resources:
             requests: { cpu: 100m, memory: 256Mi }
             limits: { cpu: 1, memory: 768Mi }
-      volumes:
-        - name: data
-          persistentVolumeClaim:
-            # Shared SQLite still lives on an RWO PVC — Phase 4 moves
-            # this to Postgres, at which point the volumeMount goes.
-            claimName: tg-bot-data
 ---
 apiVersion: v1
 kind: Service
