@@ -21,8 +21,8 @@ def test_default_mode_is_polling():
 
 
 def test_mode_is_lowercased():
-    s = _build(mode="WEBHOOK", webhook_base_url="https://example.f8f.dev")
-    assert s.mode == "webhook"
+    s = _build(mode="RECEIVER", webhook_base_url="https://example.f8f.dev")
+    assert s.mode == "receiver"
 
 
 def test_webhook_base_url_strips_trailing_slash():
@@ -32,16 +32,21 @@ def test_webhook_base_url_strips_trailing_slash():
 
 def test_webhook_full_url_concatenates_path():
     s = _build(
-        mode="webhook",
+        mode="receiver",
         webhook_base_url="https://example.f8f.dev",
         telegram_bot_token="12345:ABC",
     )
     assert s.webhook_full_url == "https://example.f8f.dev/12345:ABC"
 
 
-def test_webhook_mode_requires_url():
+def test_receiver_mode_requires_url():
     with pytest.raises(ValidationError):
-        _build(mode="webhook", webhook_base_url="")
+        _build(mode="receiver", webhook_base_url="")
+
+
+def test_webhook_mode_rejected():
+    with pytest.raises(ValidationError):
+        _build(mode="webhook", webhook_base_url="https://example.f8f.dev")
 
 
 def test_database_url_for_sqlite_uses_async_driver():

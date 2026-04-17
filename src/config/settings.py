@@ -45,11 +45,11 @@ class Settings(BaseSettings):
     telegram_bot_token: str = Field(..., description="Bot token from @BotFather")
 
     # ── Bot mode ──────────────────────────────────────────────────────────────
-    mode: Literal["polling", "webhook", "receiver"] = Field(
-        "polling", description="polling|webhook|receiver"
+    mode: Literal["polling", "receiver"] = Field(
+        "polling", description="polling|receiver"
     )
 
-    # Webhook (required when mode=webhook)
+    # Webhook (required when mode=receiver)
     webhook_base_url: str = Field("https://example.f8f.dev", description="Public base URL")
     webhook_port: int = Field(8080, description="Local port the bot listens on")
     webhook_secret_token: str = Field("", description="Secret token for webhook security")
@@ -183,9 +183,9 @@ class Settings(BaseSettings):
         return v.lower().strip() if isinstance(v, str) else v
 
     @model_validator(mode="after")
-    def _require_webhook_url_in_webhook_mode(self) -> "Settings":
-        if self.mode in ("webhook", "receiver") and not self.webhook_base_url:
-            raise ValueError("WEBHOOK_BASE_URL must be set when MODE=webhook|receiver")
+    def _require_webhook_url_in_receiver_mode(self) -> "Settings":
+        if self.mode == "receiver" and not self.webhook_base_url:
+            raise ValueError("WEBHOOK_BASE_URL must be set when MODE=receiver")
         return self
 
 

@@ -6,54 +6,20 @@ Postgres + Alembic** and **Fluent** for i18n. Every piece is swappable —
 all repositories sit behind interfaces under `src/databases/`, and
 `DATABASE_BACKEND={sqlite,postgres}` picks the concrete implementation.
 
-> **v3 status — Phase 5 shipped.** v3 inherits the v2 code and adds
-> horizontal scalability: the webhook receiver is split out from the PTB
-> handler process, updates are sharded by `chat_id` into RabbitMQ, and
-> delivery is token-bucketed against Telegram's global / per-chat rate
-> limits. **Phase 1** — `update_id` dedup, 429 `retry_after` handling,
-> `delivery_dlq`, Prometheus counters. **Phase 2** — stateless
-> `webhook-receiver` (FastAPI + aio-pika), `MODE=receiver`, the
-> `scaled` overlay with HPA. **Phase 3** — `x-consistent-hash`
-> exchange + N shard queues, `handle_update` Celery task with a
-> long-lived per-worker PTB `Application`, `update-consumer`
-> StatefulSet that preserves per-chat ordering. **Phase 4.1** —
-> `src/databases/postgres/` backend with native `UUID` /
-> `TIMESTAMPTZ` / `BOOLEAN` and `INSERT ... ON CONFLICT` upserts;
-> DTOs carry `id: uuid.UUID`. **Phase 4.2** — dual-dialect Alembic
-> chain (`0002_postgres_parity`): one `alembic upgrade head` works
-> against either backend; `env.py` picks the dialect-native `Base`.
-> **Phase 4.3** — `scripts/migrate_sqlite_to_postgres.py`: one-shot
-> data copy with preflight (refuses non-empty targets), batched
-> `INSERT ... ON CONFLICT DO NOTHING`, row-count verification, and a
-> JSON migration report. **Phase 4.4** —
-> `scripts/migrate_postgres_to_sqlite.py`: symmetric reverse copier
-> for tier-2 rollback, with a three-tier runbook. **Phase 4.5** —
-> k8s Postgres manifests, `backup-postgres` CronJob,
-> `managed-postgres` overlay, workers decoupled from the SQLite PVC.
-> **Phase 5** — `/metrics` endpoint (Prometheus), KEDA ScaledObjects
-> for `worker-delivery` + `worker-tasks` on RabbitMQ queue depth,
-> ServiceMonitor + PodMonitor, Grafana dashboard JSON, receiver +
-> handler instrumentation.
-> See [`MIGRATION_V2_TO_V3.md`](./MIGRATION_V2_TO_V3.md) for the
-> step-by-step plan and [🎯 v3 — horizontal scaling](#-v3--horizontal-scaling)
-> below for the target architecture.
+The architecture is horizontally scalable: a stateless FastAPI webhook
+receiver accepts Telegram updates and publishes them to RabbitMQ,
+where a consistent-hash exchange shards by `chat_id` into N queues.
+Each shard queue feeds a single Celery consumer running PTB handlers
+with `--concurrency=1` to preserve per-chat ordering; different chats
+run in parallel across shards. A separate delivery worker sends
+outbound messages through a Redis token-bucket rate-limiter.
+
+See [`MIGRATION_V2_TO_V3.md`](./MIGRATION_V2_TO_V3.md) for the full
+migration plan (Phases 1–6, all shipped).
 
 ---
 
-## 🎯 v3 — horizontal scaling
-
-v2 works, but has two bottlenecks baked in:
-
-1. **Webhook + handlers live in the same process.** PTB's webhook server
-   and every handler share one event loop. A long LLM call behind `/start`
-   can delay the 200 OK to Telegram → retries → duplicate work.
-2. **Bot Deployment is single-replica on purpose.** Telegram allows exactly
-   one webhook URL, and PTB is stateful (update offsets, per-chat locks
-   inside the process). Scaling the current `bot` Deployment past 1 replica
-   breaks ordering and duplicates sends.
-
-v3 removes both by splitting responsibilities across three tiers, all
-stateless except the brokers:
+## Architecture
 
 ```
 Telegram ─HTTPS─▶ Ingress ─▶ webhook-receiver (Deployment, HPA)
@@ -85,51 +51,31 @@ Highlights:
   shard queue has a single in-flight consumer, so messages from one chat
   are serialized; different chats run in parallel across shards and worker
   replicas.
-* **`update-consumer`** (Phase 3) runs the PTB handlers outside the webhook
-  hot path. Each pod consumes exactly one `updates.shard.<i>` queue
+* **`update-consumer`** runs the PTB handlers outside the webhook hot
+  path. Each pod consumes exactly one `updates.shard.<i>` queue
   (`--concurrency=1 --prefetch-multiplier=1`), so per-chat ordering is
   preserved. The update is reconstructed from the JSON payload via
   `Update.de_json` and fed through the existing dispatcher — handler
-  code stays unchanged. The pre-Phase-3 `tasks_queue` + generic
-  `worker-tasks` Deployment remains for slow side-tasks (smoke, future
-  LLM jobs) that don't need per-chat ordering.
-* **`worker-delivery`** stays as-is conceptually (generic `deliver` task +
-  facade), but the rate-limiter is hardened: global bucket + per-chat
-  bucket + 429 `retry_after` honoring + circuit-break to DLQ after N
-  retries.
-* **State moves off the bot process.** SQLite on an RWO PVC is fine for
-  v2's single replica but blocks multi-replica workers; Phase 4.1 adds a
-  `src/databases/postgres/` backend (native `UUID` / `TIMESTAMPTZ` /
-  `BOOLEAN`, `INSERT ... ON CONFLICT` upserts, `asyncpg` for the app
-  path and `psycopg` for Alembic). Phase 4.2 wires Alembic up as a
-  dual-dialect chain — `0002_postgres_parity` is a no-op on SQLite and
-  builds the Postgres-native schema (UUID / TIMESTAMPTZ / BOOLEAN +
-  `uq_kv_store_owner_key`) on Postgres, so one `alembic upgrade head`
-  works against either backend. Phase 4.3 adds
-  `scripts/migrate_sqlite_to_postgres.py` — a one-shot data copy that
-  preflights (refuses non-empty targets), batches
-  `INSERT ... ON CONFLICT DO NOTHING`, coerces UUID/tz/bool types, and
-  writes a JSON migration report. Flip with
-  `DATABASE_BACKEND=postgres` + `POSTGRES_DSN=postgresql://…`. Phase
-  4.4 adds `scripts/migrate_postgres_to_sqlite.py`: the symmetric
-  reverse copier used for tier-2 rollback (§4.4 in the migration
-  doc — config flip / reverse copy / nuclear snapshot restore).
-  Phase 4.5 ships the k8s Postgres manifests: `postgres.yaml`
-  (StatefulSet + Service + PVC), a `backup-postgres` CronJob
-  (`pg_dump -Fc`, suspended until cutover), a `managed-postgres`
-  overlay that strips the in-cluster Postgres and points at a managed
-  endpoint, and drops the SQLite PVC mount from all workers so
-  `worker-tasks` can scale to any replica count.
-* **k8s**: new overlay `k8s/overlays/scaled` with `webhook-receiver`
-  Deployment + Service + Ingress, HPAs (CPU and KEDA/RabbitMQ queue
-  depth), and the existing worker Deployments reused.
-
-Non-goals for v3:
-* Multi-bot / multi-tenancy — one bot token, one webhook.
-* Kafka or NATS — RabbitMQ's consistent-hash + Celery is enough at the
-  expected traffic and keeps the v2 stack.
-* Blue/green of the webhook URL — `setWebhook` is atomic and fast enough;
-  brief duplicate-during-switch is handled by `update_id` dedup.
+  code stays unchanged. `worker-tasks` remains for slow side-tasks
+  (smoke, future LLM jobs) that don't need per-chat ordering.
+* **`worker-delivery`** sends outbound messages via the Bot API, with a
+  hardened rate-limiter: global bucket + per-chat bucket + 429
+  `retry_after` honoring + circuit-break to DLQ after N retries.
+* **Database** supports both SQLite (local dev) and Postgres (production).
+  Dual-dialect Alembic chain: `0001_initial_schema` (SQLite) +
+  `0002_postgres_parity` (Postgres). Flip with
+  `DATABASE_BACKEND=postgres`. Migration scripts for forward
+  (`migrate_sqlite_to_postgres.py`) and reverse
+  (`migrate_postgres_to_sqlite.py`) data copy.
+* **k8s**: `k8s/overlays/scaled` ships the full topology —
+  `webhook-receiver` + HPA, `update-consumer` StatefulSet, KEDA
+  ScaledObjects for `worker-tasks`/`worker-delivery` on RabbitMQ queue
+  depth, Prometheus ServiceMonitor, Grafana dashboard. A
+  `managed-postgres` overlay strips the in-cluster Postgres for
+  RDS/Cloud SQL. `k8s/overlays/polling` is kept for local dev.
+* **Observability**: `/metrics` endpoint on the receiver, Prometheus
+  counters (delivery, dedup, receiver requests) and histograms
+  (publish latency, handler duration by shard).
 
 ---
 
@@ -139,7 +85,7 @@ Non-goals for v3:
 | -------------------------------------- | ----------------------------------------------------------------- |
 | Commands `/start`, `/smoke`            | `src/bot/handlers/`, dispatched non-blocking                      |
 | Commands `/redis_save`, `/redis_read`  | Ephemeral text stash via async Redis                              |
-| Polling ⇄ Webhook ⇄ Receiver switch    | `MODE=polling|webhook|receiver` in `.env` / ConfigMap             |
+| Polling ⇄ Receiver switch              | `MODE=polling|receiver` in `.env` / ConfigMap                     |
 | **`webhook-receiver` (Phase 2)**       | FastAPI + aio-pika, `src/receiver/`, `scaled` overlay + HPA       |
 | **Consistent-hash shards (Phase 3)**   | `x-consistent-hash` exchange + N `updates.shard.<i>` queues       |
 | **`update-consumer` (Phase 3)**        | Per-shard StatefulSet, long-lived PTB app per worker process      |
@@ -153,7 +99,7 @@ Non-goals for v3:
 | Error handling                         | Global `error_handler` + catch-all `/unknown` handler             |
 | UUID v7 primary keys                   | `uuid_utils.uuid7` via `src/utils/ids.py`                         |
 | Alembic migrations                     | Dual-dialect: `0001_initial_schema.py` (SQLite) + `0002_postgres_parity.py` (Postgres) |
-| k3s manifests                          | Kustomize `base/` + `overlays/{polling,webhook,scaled,managed-postgres}` |
+| k8s manifests                          | Kustomize `base/` + `overlays/{polling,scaled,managed-postgres}` |
 | DB & RabbitMQ backups                  | CronJobs (SQLite + Postgres + RabbitMQ) to a dedicated PVC; local shell equivalents in `scripts` |
 | Test suite                             | `pytest` — unit + SQLite + fakeredis + Alembic (see "Tests")      |
 
@@ -163,7 +109,7 @@ Non-goals for v3:
 
 ```
 .
-├── main.py                       # Entrypoint (reads MODE and runs polling/webhook)
+├── main.py                       # Entrypoint (reads MODE: polling or receiver)
 ├── alembic/                      # Dual-dialect Alembic migrations
 │   ├── env.py                    # Picks dialect-native Base from settings.database_url_sync
 │   └── versions/
@@ -185,14 +131,13 @@ Non-goals for v3:
 │   │                             # migrate Job, backup CronJobs (SQLite+Postgres+RMQ)
 │   └── overlays/
 │       ├── polling/              # MODE=polling — single-replica bot Deployment
-│       ├── webhook/              # MODE=webhook — bot Deployment + Service + Ingress
 │       ├── scaled/               # MODE=receiver + consistent-hash shards (Phase 2+3)
 │       └── managed-postgres/     # Strips self-hosted PG; points at RDS / Cloud SQL
 └── src/
     ├── config/settings.py        # Pydantic Settings (single source of truth)
     ├── bot/
     │   ├── application.py        # PTB ApplicationBuilder + handlers wiring
-    │   ├── runner.py             # polling / webhook bootstrap
+    │   ├── runner.py             # polling bootstrap
     │   ├── deps.py               # BotDeps dataclass passed into handlers
     │   └── handlers/
     │       ├── commands.py       # /start + unknown
@@ -363,7 +308,7 @@ Why this shape:
 
 ---
 
-## 🎛 Polling vs Webhook vs Receiver
+## 🎛 Polling vs Receiver
 
 Switch via `MODE`:
 
@@ -371,13 +316,7 @@ Switch via `MODE`:
 # development
 MODE=polling python main.py
 
-# production — bot owns the webhook (v2 topology)
-MODE=webhook \
-WEBHOOK_BASE_URL=https://example.f8f.dev \
-WEBHOOK_SECRET_TOKEN=... \
-python main.py
-
-# v3 Phase 2 — stateless receiver in front of RabbitMQ
+# production — stateless receiver in front of RabbitMQ
 MODE=receiver \
 WEBHOOK_BASE_URL=https://example.f8f.dev \
 WEBHOOK_SECRET_TOKEN=... \
@@ -386,41 +325,30 @@ UPDATES_QUEUE=updates_queue \
 python main.py
 ```
 
-`polling` and `webhook` boot PTB via `src/bot/runner.py`; `receiver`
-boots the FastAPI app in `src/receiver/runner.py` — no PTB, no DB, no
-LLM. Only one endpoint per bot token is ever registered with Telegram,
-so `webhook` and `receiver` are mutually exclusive in production.
+`polling` boots PTB via `src/bot/runner.py`; `receiver` boots the
+FastAPI app in `src/receiver/runner.py` — no PTB, no DB, no LLM.
 
 ---
 
-## ☸️ k3s deployment
+## ☸️ k8s deployment
 
 ```bash
 # 1. Build & push / load your image so the cluster can pull it.
 docker build -t tg-business-bot:latest .
-docker save tg-business-bot:latest | sudo k3s ctr images import -
 
 # 2. Create the secret (do NOT commit the filled-in file).
 cp k8s/base/secret.yaml.example k8s/base/secret.yaml
 $EDITOR k8s/base/secret.yaml
 
 # 3. Pick a mode and apply via kustomize.
-kubectl apply -k k8s/overlays/polling     # polling
+kubectl apply -k k8s/overlays/polling     # polling (local dev)
 #  — or —
-kubectl apply -k k8s/overlays/webhook     # webhook (bot owns the URL)
-#  — or (v3 Phase 2) —
-kubectl apply -k k8s/overlays/scaled      # stateless receiver + HPA
+kubectl apply -k k8s/overlays/scaled      # stateless receiver + HPA (production)
 
 # 4. Run migrations (idempotent).
 kubectl -n tg-bot delete job tg-bot-migrate --ignore-not-found
 kubectl -n tg-bot apply -k k8s/overlays/polling     # re-creates the Job
 ```
-
-The webhook overlay ships a Traefik Ingress for `example.f8f.dev` — change it
-in both `k8s/base/configmap.yaml` (via the kustomize overlay `WEBHOOK_BASE_URL`
-literal) and `k8s/overlays/webhook/bot-ingress.yaml`. The base domain could
-also live in a Secret if you prefer; by default we keep it in the ConfigMap
-since it's not sensitive — only the bot token / webhook secret token are.
 
 ---
 
@@ -464,7 +392,7 @@ the repo root. The most important knobs:
 | Variable                    | Default                               | Meaning                                         |
 | --------------------------- | ------------------------------------- | ----------------------------------------------- |
 | `TELEGRAM_BOT_TOKEN`        | —                                     | Bot token from @BotFather                       |
-| `MODE`                      | `polling`                             | `polling`, `webhook`, or `receiver` (v3 Phase 2)|
+| `MODE`                      | `polling`                             | `polling` or `receiver` (v3 Phase 2)            |
 | `WEBHOOK_BASE_URL`          | `https://example.f8f.dev`             | Public HTTPS URL (no trailing slash)            |
 | `WEBHOOK_PORT`              | `8080`                                | Port the bot binds to                           |
 | `WEBHOOK_SECRET_TOKEN`      | —                                     | Secret header Telegram sends with each webhook  |
@@ -525,7 +453,7 @@ The runner uses `pyproject.toml [tool.pytest.ini_options]`:
 | Layer                         | File                                                          | Notes                                               |
 | ----------------------------- | ------------------------------------------------------------- | --------------------------------------------------- |
 | UUID v7 generator             | `tests/unit/test_uuid7.py`                                    | version bits, monotonicity, fallback path           |
-| Pydantic Settings             | `tests/unit/test_settings.py`                                 | validators, derived URLs, webhook constraint        |
+| Pydantic Settings             | `tests/unit/test_settings.py`                                 | validators, derived URLs, receiver constraint       |
 | i18n translator               | `tests/unit/test_translator.py`                               | locale picker, gettext, fallbacks                   |
 | Bot DTO converter             | `tests/unit/test_bot_utils.py`                                | `dto_from_telegram_user`                            |
 | User repository (SQLite)      | `tests/integration/test_sqlite_user_repository.py`            | upsert, get, set_language, language preservation    |

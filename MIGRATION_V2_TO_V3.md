@@ -282,7 +282,7 @@ the backend swap and the data copy are independently reversible.
   unchanged), CREATE TABLE DDL asserts native `UUID` / `TIMESTAMPTZ` /
   `BOOLEAN` types, factory dispatch (sqlite/postgres without
   connecting, unknown backend rejected by pydantic `Literal`).
-* Phases 1–5 all shipped; remaining: Phase 6 (cutover + cleanup).
+* All phases (1–6) shipped. Migration complete.
 * **Follow-up — done (post-4.1):** Postgres primary key is now native
   `UUID(as_uuid=True)` and every DTO exposes `id: uuid.UUID | None`.
   The SQLite backend reuses the existing `CHAR(36)` storage via a
@@ -612,14 +612,16 @@ breaking the one-consumer rule. Two options:
 (b) allow extra replicas to consume *non-ordered* queues (e.g.
 chat-less updates: `callback_query` without `message.chat`).
 
-### Phase 6 — Cutover & cleanup
+### Phase 6 — Cutover & cleanup  ✅ Shipped
 
 * `setWebhook` → receiver's public URL.
-* Delete the old `bot` Deployment/Service/Ingress, polling overlay
-  optional to keep for local parity.
-* Remove `src/bot/runner.py` webhook branch (polling stays for dev).
-* Update `README.md` — drop the "v3 status: in progress" banner, fold
-  the scaling section into the main architecture description.
+* Deleted the old `k8s/overlays/webhook/` overlay (4 files).
+* Removed `_run_webhook()` from `src/bot/runner.py`; `"webhook"` dropped
+  from `MODE` Literal in settings — only `polling` | `receiver` remain.
+* Polling overlay kept for local development parity.
+* Updated `README.md` — dropped "v3 status: in progress" banner, folded
+  the scaling section into the main architecture description, removed
+  all webhook-mode references.
 
 ---
 
@@ -683,4 +685,4 @@ before shard count is.
 - [x] Phase 4.4: reverse script + documented rollback runbook
 - [x] Phase 4.5: `k8s/base/postgres.yaml` + `managed-postgres` overlay + `backup-postgres` CronJob; drop `tg-bot-data` PVC mount from workers
 - [x] Phase 5: HPAs + KEDA + Prometheus metrics + dashboard
-- [ ] Phase 6: cutover, cleanup, README consolidation
+- [x] Phase 6: cutover, cleanup, README consolidation

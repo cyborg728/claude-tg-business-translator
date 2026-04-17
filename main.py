@@ -2,15 +2,11 @@
 
 Usage
 -----
-Polling (default / development)::
+Polling (default / local development)::
 
     python main.py
 
-Webhook (production)::
-
-    MODE=webhook WEBHOOK_BASE_URL=https://example.f8f.dev python main.py
-
-Webhook receiver (Phase 2+)::
+Receiver (production — stateless FastAPI webhook handler)::
 
     MODE=receiver WEBHOOK_BASE_URL=https://example.f8f.dev python main.py
 

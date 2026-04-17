@@ -1,4 +1,9 @@
-"""Polling / webhook bootstrap for the bot."""
+"""Polling bootstrap for the bot.
+
+Production traffic is handled by the FastAPI webhook receiver (MODE=receiver),
+not by the PTB updater. This module is used only for local development and
+testing via MODE=polling.
+"""
 
 from __future__ import annotations
 
@@ -49,10 +54,7 @@ async def run_bot(settings: Settings | None = None) -> None:
     app = build_application(deps)
 
     try:
-        if settings.mode == "webhook":
-            await _run_webhook(app, settings)
-        else:
-            await _run_polling(app)
+        await _run_polling(app)
     finally:
         await db.disconnect()
         await redis_client.close()
@@ -65,34 +67,6 @@ async def _run_polling(app) -> None:
         await app.updater.start_polling(
             allowed_updates=_ALLOWED_UPDATES,
             drop_pending_updates=True,
-        )
-        try:
-            await asyncio.Event().wait()
-        except (KeyboardInterrupt, asyncio.CancelledError):
-            logger.info("Shutdown signal received")
-        finally:
-            if app.updater and app.updater.running:
-                await app.updater.stop()
-            if app.running:
-                await app.stop()
-
-
-async def _run_webhook(app, settings: Settings) -> None:
-    logger.info(
-        "Starting in WEBHOOK mode — listening on 0.0.0.0:%s, public URL %s",
-        settings.webhook_port,
-        settings.webhook_full_url,
-    )
-    async with app:
-        await app.start()
-        await app.updater.start_webhook(
-            listen="0.0.0.0",
-            port=settings.webhook_port,
-            url_path=settings.webhook_path,
-            secret_token=settings.webhook_secret_token or None,
-            webhook_url=settings.webhook_full_url,
-            allowed_updates=_ALLOWED_UPDATES,
-            bootstrap_retries=-1,
         )
         try:
             await asyncio.Event().wait()
