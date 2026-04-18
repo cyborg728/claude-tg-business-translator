@@ -16,6 +16,11 @@ class Settings(BaseSettings):
 
     # ── Telegram ─────────────────────────────────────────────────────────
     telegram_bot_token: str = Field(..., description="Bot token from @BotFather")
+    telegram_api_base_url: str = Field("https://api.telegram.org")
+
+    @property
+    def telegram_api_url(self) -> str:
+        return f"{self.telegram_api_base_url.rstrip('/')}/bot{self.telegram_bot_token}"
 
     # ── Webhook ──────────────────────────────────────────────────────────
     webhook_base_url: str = Field("https://example.f8f.dev")
