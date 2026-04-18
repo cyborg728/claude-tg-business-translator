@@ -9,14 +9,11 @@ addopts = [
     "--strict-markers",
     "--strict-config",
     "-q",
+    "--ignore=tests/integration",
+    "--ignore=tests/unit",
 ]
 filterwarnings = [
     "error",
-    # Third-party deprecation noise we can't control.
-    "ignore::DeprecationWarning:telegram.*",
-    "ignore::DeprecationWarning:celery.*",
-    "ignore::DeprecationWarning:kombu.*",
-    # fluent.runtime opens FTL files via FileIO and relies on GC to close them.
     "ignore::ResourceWarning",
     "ignore::pytest.PytestUnraisableExceptionWarning",
 ]
@@ -25,7 +22,7 @@ filterwarnings = [
 branch = true
 source = ["src"]
 omit = [
-    "src/bot/runner.py",
+    "src/receiver/runner.py",
     "main.py",
 ]
 

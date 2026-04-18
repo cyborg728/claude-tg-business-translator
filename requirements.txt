@@ -1,40 +1,16 @@
-# ── Telegram bot ─────────────────────────────────────────────────────────────
-python-telegram-bot[webhooks,rate-limiter]==22.6
-
 # ── Config ───────────────────────────────────────────────────────────────────
 pydantic>=2.11.0
 pydantic-settings>=2.13.0
 
-# ── Database (async SQLAlchemy + SQLite/Postgres + migrations) ──────────────
-SQLAlchemy>=2.0.46
-aiosqlite>=0.22.1
-alembic>=1.16.0
-greenlet>=3.1.0
-# Postgres drivers: asyncpg for the async app path, psycopg[binary] for Alembic.
-asyncpg>=0.30.0
-psycopg[binary]>=3.2.0
-
-# ── Task queue (Celery + RabbitMQ broker / Redis result backend) ────────────
-celery>=5.5.3
-kombu>=5.5.0
-amqp>=5.3.0
-
-# ── Redis (cache + Celery result backend + rate-limit window) ───────────────
-redis[hiredis]>=5.2.1
-
-# ── i18n ────────────────────────────────────────────────────────────────────
-fluent.runtime>=0.4.0
-
-# ── UUID v7 ─────────────────────────────────────────────────────────────────
-uuid-utils>=0.10.0
-
-# ── HTTP (for webhook set-up and misc) ──────────────────────────────────────
-httpx>=0.28.0
-
-# ── Webhook receiver (MODE=receiver, Phase 2) ───────────────────────────────
-fastapi>=0.115.0
+# ── Web framework ───────────────────────────────────────────────────────────
+litestar>=2.16.0
 uvicorn[standard]>=0.32.0
+
+# ── RabbitMQ (async publisher) ──────────────────────────────────────────────
 aio-pika>=9.4.0
 
-# ── Observability (in-process counters; HTTP exposition comes in Phase 5) ───
+# ── Redis (dedup) ───────────────────────────────────────────────────────────
+redis[hiredis]>=5.2.1
+
+# ── Observability ───────────────────────────────────────────────────────────
 prometheus-client>=0.21.0

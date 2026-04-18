@@ -1,17 +1,10 @@
-"""Entry point for ``MODE=receiver``.
-
-Stands up the FastAPI app behind a uvicorn server, with Redis and the
-RabbitMQ publisher wired in. Graceful shutdown: closes the publisher
-connection and the Redis client on exit.
-"""
-
 from __future__ import annotations
 
 import logging
 
 import uvicorn
 
-from src.cache.redis_client import get_redis
+from src.cache import get_redis
 from src.config import Settings, get_settings
 
 from .app import create_app
@@ -34,13 +27,12 @@ async def run_receiver(settings: Settings | None = None) -> None:
 
     app = create_app(settings, redis, publisher)
 
-    # log_config=None → defer to the root logger configured in main.py.
     config = uvicorn.Config(
         app,
-        host="0.0.0.0",  # noqa: S104 — bind inside a container; Ingress fronts it
+        host="0.0.0.0",  # noqa: S104
         port=settings.webhook_port,
         log_config=None,
-        access_log=False,  # noisy; re-enable via Prometheus in Phase 5
+        access_log=False,
     )
     server = uvicorn.Server(config)
 
