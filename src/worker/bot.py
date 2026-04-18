@@ -3,7 +3,8 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-import httpx
+from telegram import Update
+from telegram.ext import Application, ApplicationBuilder, ContextTypes, TypeHandler
 
 logger = logging.getLogger(__name__)
 
@@ -20,59 +21,47 @@ _HELP_TEXT = (
 
 
 class Bot:
-    def __init__(self, api_url: str, *, timeout: float = 10.0) -> None:
-        self._api_url = api_url.rstrip("/")
-        self._client = httpx.AsyncClient(timeout=timeout)
+    def __init__(
+        self,
+        token: str,
+        *,
+        api_base_url: str = "https://api.telegram.org",
+    ) -> None:
+        self._app: Application = (
+            ApplicationBuilder()
+            .token(token)
+            .base_url(f"{api_base_url.rstrip('/')}/bot")
+            .updater(None)
+            .build()
+        )
+        self._app.add_handler(TypeHandler(Update, _dispatch))
+
+    async def start(self) -> None:
+        await self._app.initialize()
+        await self._app.start()
 
     async def close(self) -> None:
-        await self._client.aclose()
+        if self._app.running:
+            await self._app.stop()
+        await self._app.shutdown()
 
     async def handle_update(self, update: dict[str, Any]) -> None:
-        message = update.get("message") or update.get("business_message")
-        if not isinstance(message, dict):
+        tg_update = Update.de_json(update, self._app.bot)
+        if tg_update is None:
             return
-
-        chat = message.get("chat") or {}
-        chat_id = chat.get("id") if isinstance(chat, dict) else None
-        text = message.get("text")
-        if not isinstance(chat_id, int) or not isinstance(text, str):
-            return
-
-        command = _parse_command(text)
-        business_connection_id = update.get("business_connection_id") or message.get(
-            "business_connection_id"
-        )
-
-        if command == "/start":
-            await self._send(chat_id, _START_TEXT, business_connection_id)
-        elif command == "/help":
-            await self._send(chat_id, _HELP_TEXT, business_connection_id)
-
-    async def _send(
-        self,
-        chat_id: int,
-        text: str,
-        business_connection_id: str | None,
-    ) -> None:
-        payload: dict[str, Any] = {"chat_id": chat_id, "text": text}
-        if isinstance(business_connection_id, str):
-            payload["business_connection_id"] = business_connection_id
-
-        resp = await self._client.post(f"{self._api_url}/sendMessage", json=payload)
-        if resp.status_code >= 400:
-            logger.warning(
-                "sendMessage failed chat_id=%s status=%s body=%s",
-                chat_id,
-                resp.status_code,
-                resp.text[:200],
-            )
+        await self._app.process_update(tg_update)
 
 
-def _parse_command(text: str) -> str | None:
-    if not text.startswith("/"):
-        return None
-    head = text.split(maxsplit=1)[0]
-    return head.split("@", 1)[0].lower()
+async def _dispatch(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    message = update.effective_message
+    if message is None or not message.text:
+        return
+
+    command = message.text.split(maxsplit=1)[0].split("@", 1)[0].lower()
+    if command == "/start":
+        await message.reply_text(_START_TEXT)
+    elif command == "/help":
+        await message.reply_text(_HELP_TEXT)
 
 
 __all__ = ["Bot"]

@@ -15,7 +15,10 @@ logger = logging.getLogger(__name__)
 async def run_worker(settings: Settings | None = None) -> None:
     settings = settings or get_settings()
 
-    bot = Bot(settings.telegram_api_url)
+    bot = Bot(
+        settings.telegram_bot_token,
+        api_base_url=settings.telegram_api_base_url,
+    )
     consumer = UpdateConsumer(
         rabbitmq_url=settings.rabbitmq_url,
         exchange=settings.updates_exchange,
@@ -24,6 +27,7 @@ async def run_worker(settings: Settings | None = None) -> None:
         handler=bot.handle_update,
     )
 
+    await bot.start()
     await consumer.start()
     logger.info("worker running; press Ctrl+C to stop")
 
