@@ -9,8 +9,6 @@ addopts = [
     "--strict-markers",
     "--strict-config",
     "-q",
-    "--ignore=tests/integration",
-    "--ignore=tests/unit",
 ]
 filterwarnings = [
     "error",
